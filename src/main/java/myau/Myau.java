@@ -122,6 +122,7 @@ public class Myau {
         moduleManager.modules.put(Keystrokes.class, new Keystrokes());
         moduleManager.modules.put(CylinderESP.class, new CylinderESP());
         moduleManager.modules.put(HudEditor.class, new HudEditor());
+        moduleManager.modules.put(MenuStyle.class, new MenuStyle());
         moduleManager.modules.put(Updater.class, new Updater());
         moduleManager.modules.put(MoreKB.class, new MoreKB());
         moduleManager.modules.put(Indicators.class, new Indicators());
