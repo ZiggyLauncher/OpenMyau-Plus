@@ -1,98 +1,73 @@
-# Open Myau Plus
+# Myau+
 
-![Preview](/images/image3.png)
- 
-[Myau Client](https://myau.sell.app/),  OpenMyau But Better. 
-
-
-Open Myau Plus is an enhanced version of the original OpenMyau client, built with additional features, optimizations, and quality-of-life improvements. This project focuses on expanding the core functionality while maintaining stability and performance.
-
-🔗 Official Client: https://myau.sell.app/
+A Minecraft **1.8.9 Forge** utility client, maintained by **Ziggy**.
 
 ---
 
-# Features & Improvements
+## Features
 
-- Various bug fixes and performance improvements
-- Enhanced overall user experience compared to the base version
+Everything from the base client, plus this fork's own work:
+
+**HUD**
+- `Hotbar` — custom rounded hotbar with a gradient XP bar
+- `ArmorHUD` — armour pieces with durability bars
+- `PotionHUD` — active effects with remaining time and a draining bar
+- `Keystrokes` — WASD / mouse / space overlay with live CPS (counts AutoClicker's clicks too)
+- `HotbarText` — item name above the hotbar, fading in and out
+- `HudEditor` — drag every HUD element where you want it (`.hud`), with edge, centre and
+  element-to-element snapping
+
+**Render**
+- `CylinderESP` — smooth round cylinder ESP with a soft fade, spinning top ring and hurt flash
+
+**Combat**
+- `Hitflick` / `VoidFlick` — knockback displacement, with rotations ramped over several ticks,
+  GCD-aligned and clamped inside the target's hitbox
+- `MoreKB` — sprint reset with a `WTAP` mode that goes through the real input path
+- `VelocityPreserver` — holds incoming knockback by delaying the inbound packet stream
+
+**Utility**
+- `Updater` — checks GitHub releases, can download in the background and install on exit
 
 ---
 
-# About
-
-This project is based on OpenMyau, with the goal of refining and extending its capabilities beyond the original implementation.
-
----
-
-#  Issues & Suggestions
-
-If you encounter any bugs or have ideas for new features, feel free to open an issue:
-
- https://github.com/IamNespola/OpenMyau-Plus/issues
-
----
-
-# Building
-
-To build the project, run:
+## Building
 
 ```bash
-git clone https://github.com/IamNespola/OpenMyau-Plus.git
+git clone https://github.com/ZiggyLauncher/OpenMyau-Plus.git
 cd OpenMyau-Plus
 ./gradlew build
 ```
 
-This produces a single `build/libs/Myau+.jar` containing **both** the client and its
-scripting support.
+The jar lands in `build/libs/` and contains both the client and its scripting support.
 
 ---
 
-# Scripting (Raven Script Loader)
+## Updating
+
+The `Updater` module checks the releases of this repository.
+
+- **Off** — never checks
+- **Notify** — tells you in chat when a newer release exists
+- **Auto** — downloads it in the background and installs it when you quit the game
+
+`.update check` and `.update install` do the same by hand. `Repo-Owner` and `Repo-Name` point the
+updater at whichever repository you build from.
+
+---
+
+## Scripting
 
 Script support comes from [`rsl/`](rsl/), a vendored copy of
-[Raven Script Loader](https://codeberg.org/monster-energy/raven-script-loader). It is
-bundled into the client jar rather than shipped separately: the root build compiles
-`rsl/src/main/java` and `rsl/src/main/resources` as extra source directories, so one jar
-registers **two Forge mods** — `myau` and `rsl` — under the mixin configs
-`mixins.myau.json,mixins.rsl.json`.
-
-RSL's own `build.gradle.kts` and wrapper are **not used** (they need a Java 21+ JVM). Keeping
-it in the root build means one compile and one remap pass, with both mixin configs sharing a
-single generated refmap. Install just the one jar.
-
-Scripts drive the client through the `myau.*` API, which has no compile-time link to the
-client — it issues chat commands (`.t <module>`, `.<module> <property> <value>`) that Myau+
-intercepts on the outgoing chat packet, and reads back the replies while suppressing them
-from the chat GUI. That bridge depends on Myau+'s command output format, so changes to
-command replies can break scripts.
-
-See [`rsl/UPSTREAM.md`](rsl/UPSTREAM.md) for provenance, the local patches applied on top of
-upstream, and how to pull updates.
+[Raven Script Loader](https://codeberg.org/monster-energy/raven-script-loader) by `@maya.gay`.
+It is bundled into the client jar, so one jar registers two Forge mods, `myau` and `rsl`.
 
 ---
 
-#  Contributing
+## Credits and licence
 
-Contributions are welcome! You can:
+Licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE).
 
-- Open an issue
-- Submit a pull request
-
----
-#  Support
-
-If you like this project, consider giving it a star on GitHub — it really helps!
----
-
-#  Contact
-
-If you're interested in collaborating or have any questions, feel free to reach out:
-
-- Discord: https://dsc.gg/nespola
-- Username: @nespola1
-
----
-
-# © License
-
-This project follows the same licensing terms as the original OpenMyau project unless stated otherwise.
+This is a fork of [OpenMyau-Plus](https://github.com/IamNespola/OpenMyau-Plus) by nespola001,
+itself based on OpenMyau. It also bundles [ViaVersion / ViaMCP](https://viaversion.com/) and an
+account manager by `ksyz`. Those projects keep their own authorship and licences.

@@ -85,7 +85,6 @@ public class CategoryComponent {
 
     public void render(FontRenderer renderer) {
         this.width = 92;
-        update();
         height = 0;
         for (Component moduleRenderManager : this.modulesInCategory) {
             height += moduleRenderManager.getHeight();
@@ -94,6 +93,7 @@ public class CategoryComponent {
         if (scroll > maxScroll) scroll = maxScroll;
         if (animScroll > maxScroll) animScroll = maxScroll;
         animScroll += (scroll - animScroll) * 0.2;
+        update();
         if (!this.modulesInCategory.isEmpty() && this.categoryOpened) {
             int displayHeight = Math.min(height, MAX_HEIGHT);
             Gui.drawRect(this.x - 1, this.y, this.x + this.width + 1, this.y + this.bh + displayHeight + 4, new Color(0, 0, 0, 100).getRGB());
@@ -112,8 +112,6 @@ public class CategoryComponent {
                 int compHeight = c2.getHeight();
                 if (renderHeight + compHeight > animScroll &&
                         renderHeight < animScroll + MAX_HEIGHT) {
-                    int drawY = (int) (renderHeight - animScroll);
-                    c2.setComponentStartAt(this.bh + 3 + drawY);
                     c2.draw(new AtomicInteger(0));
                 }
                 renderHeight += compHeight;
@@ -126,12 +124,29 @@ public class CategoryComponent {
         }
     }
 
+    /**
+     * Lays out every module at its scrolled position. Modules scrolled out of view get offsets
+     * outside the viewport; if they kept unscrolled offsets they'd overlap the visible ones and a
+     * single click would toggle several modules.
+     */
     public void update() {
-        int offset = this.bh + 3;
+        int offset = this.bh + 3 - (int) animScroll;
         for (Component component : this.modulesInCategory) {
             component.setComponentStartAt(offset);
             offset += component.getHeight();
         }
+    }
+
+    /**
+     * The clipped area the module list is drawn in - the only place clicks can hit a module.
+     */
+    public boolean isInsideContent(int x, int y) {
+        if (!this.categoryOpened || this.modulesInCategory.isEmpty()) {
+            return false;
+        }
+        int top = this.y + this.bh + 3;
+        int bottom = top + Math.min(height, MAX_HEIGHT);
+        return x >= this.x && x <= this.x + this.width && y >= top && y <= bottom;
     }
 
     public int getX() {

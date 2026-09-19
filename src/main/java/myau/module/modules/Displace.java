@@ -468,7 +468,7 @@ public class Displace extends Module {
         blinkingModule = false;
     }
 
-    @EventTarget(Priority.HIGHEST)
+    @EventTarget(value = Priority.HIGHEST, runWhenDisabled = true)
     public void onGameTick(TickEvent e) {
         if (e.getType() != EventType.PRE) return;
         if (releaseBlinkNextGameTick) {

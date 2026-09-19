@@ -341,6 +341,36 @@ public class ItemUtil {
         return itemStack.getItem() instanceof ItemSword;
     }
 
+    /**
+     * Hotbar slot holding the highest Knockback enchantment (a "KB stick"), or -1 if none.
+     */
+    public static int findBestKnockbackHotbarSlot() {
+        // A stick is a KB stick whatever its NBT looks like (servers hide or customise the
+        // enchant); prefer the highest Knockback level among sticks, then fall back to any other
+        // Knockback-enchanted item.
+        int stickSlot = -1;
+        int stickLevel = -1;
+        int otherSlot = -1;
+        int otherLevel = 0;
+        for (int slot = 0; slot < 9; slot++) {
+            ItemStack stack = ItemUtil.mc.thePlayer.inventory.getStackInSlot(slot);
+            if (stack == null) {
+                continue;
+            }
+            int level = EnchantmentHelper.getEnchantmentLevel(Enchantment.knockback.effectId, stack);
+            if (stack.getItem() == Items.stick) {
+                if (level > stickLevel) {
+                    stickLevel = level;
+                    stickSlot = slot;
+                }
+            } else if (level > otherLevel) {
+                otherLevel = level;
+                otherSlot = slot;
+            }
+        }
+        return stickSlot >= 0 ? stickSlot : otherSlot;
+    }
+
     public static boolean isHoldingSword() {
         ItemStack itemStack = ItemUtil.mc.thePlayer.getHeldItem();
         if (itemStack == null) {

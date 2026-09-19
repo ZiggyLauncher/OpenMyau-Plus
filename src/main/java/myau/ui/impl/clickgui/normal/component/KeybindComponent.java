@@ -72,11 +72,19 @@ public class KeybindComponent extends Component {
         return false;
     }
 
+    /**
+     * Called by the screen when a non-left mouse button is pressed anywhere while listening.
+     */
+    public void bindMouse(int mouseButton) {
+        module.setKey(KeyBindUtil.mouseButtonToKey(mouseButton));
+        this.binding = false;
+    }
+
     @Override
     public void keyTyped(char typedChar, int keyCode) {
         if (this.binding) {
-            if (keyCode == Keyboard.KEY_DELETE || keyCode == Keyboard.KEY_BACK || keyCode == Keyboard.KEY_ESCAPE) {
-                module.setKey(Keyboard.KEY_NONE);
+            if (KeyBindUtil.isUnbindKey(keyCode)) {
+                module.setKey(KeyBindUtil.NONE);
             } else {
                 module.setKey(keyCode);
             }

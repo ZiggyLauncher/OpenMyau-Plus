@@ -61,7 +61,7 @@ public class RenderFixes extends Module {
         super("RenderFixes", true, false, "Modern rounded chat and scoreboard rendering");
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onRender2D(Render2DEvent event) {
         updateDragging();
     }

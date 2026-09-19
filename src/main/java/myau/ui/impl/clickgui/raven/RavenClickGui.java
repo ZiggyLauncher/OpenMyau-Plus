@@ -12,10 +12,14 @@ import org.lwjgl.opengl.GL11;
 import myau.Myau;
 import myau.config.Config;
 import myau.module.Module;
-import myau.module.modules.*;
+import myau.module.modules.ClickGUIModule;
+import myau.module.modules.HUD;
+import myau.module.modules.RenderFixes;
+import myau.ui.ModuleCategories;
 import myau.ui.impl.clickgui.raven.components.BindComponent;
 import myau.ui.impl.clickgui.raven.components.CategoryComponent;
 import myau.ui.impl.clickgui.raven.components.ModuleComponent;
+import myau.util.KeyBindUtil;
 import myau.util.Timer;
 import myau.util.shader.BlurUtils;
 import myau.util.shader.RoundedUtils;
@@ -36,7 +40,7 @@ public class RavenClickGui extends GuiScreen {
     private final File configFile = new File("./config/Myau/", "clickgui.txt");
     private final String clientName = "Myau+";
     private final String clientVersion = Myau.version;
-    private final String developer = "dev, Nespola";
+    private final String developer = "dev, Ziggy";
     public int originalScale;
     public int previousScale;
     public float updates;
@@ -57,37 +61,8 @@ public class RavenClickGui extends GuiScreen {
         categories = new ArrayList<>();
         int y = 5;
 
-        List<Module> combatModules = collect(
-                AimAssist.class, MoveFix.class, AutoClicker.class, KillAura.class, Wtap.class, Velocity.class, ServerLag.class,
-                Reach.class, TargetStrafe.class, NoHitDelay.class, AntiFireball.class, KnockbackDelay.class,
-                LagRange.class, HitBox.class, MoreKB.class, Refill.class, HitSelect.class, BackTrack.class,
-                Hitflick.class, TimerRange.class, ClickAssits.class, Criticals.class, BlockHit.class,
-                SprintReset.class, Displace.class, TickBase.class, Piercing.class, Stasis.class);
-        List<Module> movementModules = collect(
-                AntiAFK.class, Fly.class, FastBow.class, myau.module.modules.Timer.class, Speed.class, LongJump.class,
-                Sprint.class, SafeWalk.class, Jesus.class, Blink.class, NoFall.class, NoSlow.class, KeepSprint.class,
-                Eagle.class, NoJumpDelay.class, AntiVoid.class);
-        List<Module> renderModules = collect(
-                ESP.class, Chams.class, FullBright.class, Tracers.class, NameTags.class, Xray.class, TargetESP.class,
-                TargetHUD.class, Indicators.class, BedESP.class, ItemESP.class, BreakProgress.class, ViewClip.class,
-                NoHurtCam.class, HUD.class, Notifications.class, ClickGUIModule.class, ClickGUIModule.class,
-                ChestESP.class, Trajectories.class, Radar.class, RenderFixes.class, FPScounter.class, WaterMark.class,
-                WaterMark2.class, HitParticleEffects.class, DynamicIsland.class, ESP2D.class, TeamHealthDisplay.class,
-                Statistics.class, Animations.class, BlockOverlay.class, Ambience.class, Capes.class, FreeLook.class, ItemPhysics.class);
-        List<Module> playerModules = collect(
-                AutoHeal.class, FakeLag.class, AutoTool.class, ChestStealer.class, AutoBedDef.class, InvManager.class,
-                InvWalk.class, Scaffold.class, AutoBlockIn.class, AutoSwap.class, SpeedMine.class, FastPlace.class,
-                GhostHand.class, MCF.class, AntiDebuff.class, FlagDetector.class, AutoGapple.class, ChestAura.class,
-                AutoHeadHitter.class, ThrowAura.class);
-        List<Module> miscModules = collect(
-                Spammer.class, BedNuker.class, AntiBot.class, BedTracker.class, LightningTracker.class, NoRotate.class,
-                NickHider.class, AntiObbyTrap.class, AntiObfuscate.class, AutoAnduril.class, InventoryClicker.class,
-                Disabler.class, ClientSpoofer.class, AutoHypixel.class, MouseRawInput.class, BedwarUtils.class, AutoAuth.class);
-
-        String[] names = {"Combat", "Movement", "Render", "Player", "Misc"};
-        List<List<Module>> groups = Arrays.asList(combatModules, movementModules, renderModules, playerModules, miscModules);
-        for (int i = 0; i < names.length; i++) {
-            CategoryComponent categoryComponent = new CategoryComponent(names[i], groups.get(i));
+        for (ModuleCategories.Category category : ModuleCategories.Category.values()) {
+            CategoryComponent categoryComponent = new CategoryComponent(category.getLabel(), ModuleCategories.modules(category));
             categoryComponent.setY(y, false);
             categories.add(categoryComponent);
             y += 20;
@@ -96,21 +71,12 @@ public class RavenClickGui extends GuiScreen {
         loadPositions();
     }
 
-    @SafeVarargs
-    private final List<Module> collect(Class<? extends Module>... classes) {
-        List<Module> list = new ArrayList<>();
-        for (Class<? extends Module> c : classes) {
-            Module m = Myau.moduleManager.getModule(c);
-            if (m != null) {
-                list.add(m);
-            }
-        }
-        list.sort(Comparator.comparing(m -> m.getName().toLowerCase()));
-        return list;
-    }
-
     public static RavenClickGui getInstance() {
         return instance;
+    }
+
+    public static void resetInstance() {
+        instance = null;
     }
 
     public void initMain() {
@@ -276,6 +242,19 @@ public class RavenClickGui extends GuiScreen {
     }
 
     public void mouseClicked(int mouseX, int mouseY, int mouseButton) {
+        BindComponent bindComponent = bindingComponent();
+        if (bindComponent != null) {
+            if (KeyBindUtil.isBindableMouseButton(mouseButton)) {
+                bindComponent.bindMouse(mouseButton);
+                return;
+            }
+            // Left click stops listening (and is consumed so it can't re-toggle the bind button).
+            bindComponent.cancelBinding();
+            return;
+        } else if (clickGuiModule() != null && clickGuiModule().isCloseMouseButton(mouseButton)) {
+            clickGuiModule().setEnabled(false);
+            return;
+        }
         if (mouseButton == 0) {
             boolean draggingAssigned = false;
             for (int i = categories.size() - 1; i >= 0; i--) {
@@ -362,7 +341,13 @@ public class RavenClickGui extends GuiScreen {
 
     @Override
     public void keyTyped(char t, int k) {
-        if (k == Keyboard.KEY_ESCAPE && !binding()) {
+        BindComponent bindComponent = bindingComponent();
+        if (bindComponent != null) {
+            bindComponent.keyTyped(t, k);
+            return;
+        }
+        ClickGUIModule clickGUIModule = clickGuiModule();
+        if (k == Keyboard.KEY_ESCAPE || (clickGUIModule != null && clickGUIModule.isCloseKey(k))) {
             this.mc.displayGuiScreen(null);
         } else {
             Iterator<CategoryComponent> iterator = categories.iterator();
@@ -389,6 +374,12 @@ public class RavenClickGui extends GuiScreen {
         }
         this.mc.gameSettings.guiScale = originalScale;
         savePositions();
+        // Like every other skin: closing the screen means the ClickGUI module is off again,
+        // otherwise the next keypress only toggles it off invisibly.
+        ClickGUIModule guiModule = clickGuiModule();
+        if (guiModule != null && !guiModule.isSwitchingGuiStyle()) {
+            guiModule.setEnabled(false);
+        }
         saveCurrentConfig();
     }
 
@@ -398,19 +389,28 @@ public class RavenClickGui extends GuiScreen {
     }
 
     private boolean binding() {
+        return bindingComponent() != null;
+    }
+
+    private BindComponent bindingComponent() {
         for (CategoryComponent c : categories) {
             for (Component component : c.getModules()) {
                 if (component instanceof ModuleComponent) {
                     ModuleComponent moduleComponent = (ModuleComponent) component;
                     for (Component setting : moduleComponent.settings) {
                         if (setting instanceof BindComponent && ((BindComponent) setting).isBinding) {
-                            return true;
+                            return (BindComponent) setting;
                         }
                     }
                 }
             }
         }
-        return false;
+        return null;
+    }
+
+    private ClickGUIModule clickGuiModule() {
+        Module module = Myau.moduleManager.getModule("ClickGUI");
+        return module instanceof ClickGUIModule ? (ClickGUIModule) module : null;
     }
 
     private void savePositions() {
@@ -441,16 +441,19 @@ public class RavenClickGui extends GuiScreen {
         if (!configFile.exists()) return;
         com.google.gson.JsonParser parser = new com.google.gson.JsonParser();
         try (java.io.FileReader reader = new java.io.FileReader(configFile)) {
-            com.google.gson.JsonObject json = parser.parse(reader).getAsJsonObject();
+            com.google.gson.JsonElement parsed = parser.parse(reader);
+            if (parsed == null || !parsed.isJsonObject()) return;
+            com.google.gson.JsonObject json = parsed.getAsJsonObject();
             for (CategoryComponent cat : categories) {
-                if (json.has(cat.getName())) {
+                if (json.has(cat.getName()) && json.get(cat.getName()).isJsonObject()) {
                     com.google.gson.JsonObject pos = json.getAsJsonObject(cat.getName());
-                    cat.setX(pos.get("x").getAsInt());
-                    cat.setY(pos.get("y").getAsInt());
-                    cat.setOpened(pos.get("open").getAsBoolean());
+                    if (pos.has("x")) cat.setX(pos.get("x").getAsInt());
+                    if (pos.has("y")) cat.setY(pos.get("y").getAsInt());
+                    if (pos.has("open")) cat.setOpened(pos.get("open").getAsBoolean());
                 }
             }
-        } catch (java.io.IOException e) {
+        } catch (Exception e) {
+            // A truncated/corrupt layout file must never keep the GUI from opening.
             e.printStackTrace();
         }
     }

@@ -22,4 +22,7 @@ public interface IAccessorMinecraft {
 
     @Accessor("rightClickDelayTimer")
     void setRightClickDelayTimer(int integer);
+
+    @Accessor("leftClickCounter")
+    int getLeftClickCounter();
 }

@@ -158,7 +158,7 @@ public class NoSlow extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onUpdate(UpdateEvent event) {
         // BadPacketsComponent bookkeeping: save on PRE, reset on POST (runs even while disabled).
         if (mc.thePlayer != null && mc.theWorld != null) {
@@ -273,7 +273,7 @@ public class NoSlow extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onPacket(PacketEvent event) {
         // BadPacketsComponent tracking (runs regardless of mode).
         if (event.getType() == EventType.SEND) {

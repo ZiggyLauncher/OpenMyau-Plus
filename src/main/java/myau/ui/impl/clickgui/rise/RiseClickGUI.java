@@ -2,6 +2,7 @@ package myau.ui.impl.clickgui.rise;
 
 import myau.Myau;
 import myau.module.Module;
+import myau.util.KeyBindUtil;
 import myau.module.modules.ClickGUIModule;
 import myau.util.AnimationUtil;
 import myau.util.RenderUtil;
@@ -61,11 +62,11 @@ public class RiseClickGUI extends GuiScreen {
 
     static {
         map(Tab.GHOST, "AimAssist", "AutoClicker", "Reach", "Velocity", "WTap", "Wtap", "HitBox",
-                "HitSelect", "BackTrack", "Hitflick", "MoreKB", "KnockbackDelay", "ClickAssits", "SprintReset", "BlockHit");
+                "HitSelect", "BackTrack", "Hitflick", "VoidFlick", "MoreKB", "KnockbackDelay", "ClickAssits", "SprintReset", "BlockHit");
         map(Tab.COMBAT, "KillAura", "TargetStrafe", "NoHitDelay", "AntiFireball", "LagRange", "Refill",
                 "Criticals", "Displace", "ServerLag");
         map(Tab.MOVEMENT, "AntiAFK", "Fly", "FastBow", "Speed", "LongJump", "Sprint", "SafeWalk",
-                "Jesus", "NoFall", "NoSlow", "KeepSprint", "Eagle", "NoJumpDelay");
+                "Jesus", "NoFall", "NoSlow", "KeepSprint", "Eagle", "NoJumpDelay", "VelocityPreserver");
         map(Tab.PLAYER, "AutoHeal", "AutoTool", "ChestStealer", "InvManager", "InvWalk", "Scaffold",
                 "AutoBlockIn", "AutoSwap", "SpeedMine", "FastPlace", "MCF", "AntiDebuff", "FlagDetector",
                 "AutoGapple", "Gapple", "ThrowAura", "InventoryClicker", "PacketConsume");
@@ -513,6 +514,21 @@ public class RiseClickGUI extends GuiScreen {
     protected void mouseClicked(int mouseX, int mouseY, int mouseButton) throws IOException {
         if (closing) return;
 
+        for (RiseModuleCard card : allCards) {
+            if (card.isBindingKey()) {
+                if (KeyBindUtil.isBindableMouseButton(mouseButton)) {
+                    card.bindMouse(mouseButton);
+                    return;
+                }
+                break;
+            }
+        }
+        Module guiModule = Myau.moduleManager.getModule("ClickGUI");
+        if (guiModule instanceof ClickGUIModule && ((ClickGUIModule) guiModule).isCloseMouseButton(mouseButton)) {
+            close();
+            return;
+        }
+
         if (mouseButton == 0 && mouseX >= windowX && mouseX <= windowX + WINDOW_W
                 && mouseY >= windowY && mouseY <= windowY + 15) {
             dragging = true;
@@ -588,7 +604,8 @@ public class RiseClickGUI extends GuiScreen {
         }
 
         Module clickGUIModule = Myau.moduleManager.getModule("ClickGUI");
-        if (keyCode == Keyboard.KEY_ESCAPE || (clickGUIModule != null && keyCode == clickGUIModule.getKey())) {
+        if (keyCode == Keyboard.KEY_ESCAPE
+                || (clickGUIModule instanceof ClickGUIModule && ((ClickGUIModule) clickGUIModule).isCloseKey(keyCode))) {
             if (keyCode != Keyboard.KEY_ESCAPE && System.currentTimeMillis() - openedAt < 250L) {
                 return;
             }

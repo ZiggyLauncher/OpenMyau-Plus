@@ -89,7 +89,7 @@ public class AntiVoid extends Module {
 
     @EventTarget
     public void onKey(KeyEvent event) {
-        if (event.getKey() == mc.gameSettings.keyBindUseItem.getKeyCode()) {
+        if (mc.thePlayer != null && event.getKey() == mc.gameSettings.keyBindUseItem.getKeyCode()) {
             ItemStack currentItem = mc.thePlayer.inventory.getCurrentItem();
             if (currentItem != null && currentItem.getItem() instanceof ItemEnderPearl) {
                 this.resetBlink();

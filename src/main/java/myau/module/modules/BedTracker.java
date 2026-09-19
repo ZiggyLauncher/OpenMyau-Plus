@@ -343,7 +343,7 @@ public class BedTracker extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         this.waiting = false;
         this.bedScanAt = -1L;

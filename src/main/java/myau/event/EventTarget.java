@@ -17,4 +17,11 @@ import java.lang.annotation.*;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface EventTarget {
     byte value() default Priority.MEDIUM;
+
+    /**
+     * Handlers declared on a {@link myau.module.Module} are skipped by the EventManager while
+     * the module is disabled. Set this on the few handlers that must keep running regardless -
+     * world-load resets, delay bookkeeping, flushing queued packets, releasing injected input.
+     */
+    boolean runWhenDisabled() default false;
 }

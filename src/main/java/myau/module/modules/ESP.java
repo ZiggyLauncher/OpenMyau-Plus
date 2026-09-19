@@ -97,7 +97,7 @@ public class ESP extends Module {
         return this.glow;
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onResize(ResizeEvent event) {
         if (this.framebuffer != null) {
             this.framebuffer.deleteFramebuffer();

@@ -126,7 +126,7 @@ public class InvWalk extends Module {
         return true;
     }
 
-    @EventTarget(Priority.LOWEST)
+    @EventTarget(value = Priority.LOWEST, runWhenDisabled = true)
     public void onTick(TickEvent event) {
         if (event.getType() == EventType.PRE) {
             if (this.openDelayTicks >= 0) {

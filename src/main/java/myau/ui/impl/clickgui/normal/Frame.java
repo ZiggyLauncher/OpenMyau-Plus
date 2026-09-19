@@ -4,6 +4,7 @@ import lombok.Getter;
 import myau.module.Module;
 import myau.module.modules.ClickGUIModule;
 import myau.ui.impl.clickgui.normal.component.Component;
+import myau.ui.impl.clickgui.normal.component.KeybindComponent;
 import myau.ui.impl.clickgui.normal.component.ModuleEntry;
 import myau.util.RenderUtil;
 import myau.util.font.FontManager;
@@ -35,12 +36,17 @@ public class Frame extends Component {
     }
 
     public boolean isAnyComponentBinding() {
+        return bindingComponent() != null;
+    }
+
+    public KeybindComponent bindingComponent() {
         if (expanded) {
             for (ModuleEntry entry : moduleEntries) {
-                if (entry.isBinding()) return true;
+                KeybindComponent component = entry.bindingComponent();
+                if (component != null) return component;
             }
         }
-        return false;
+        return null;
     }
 
     @Override

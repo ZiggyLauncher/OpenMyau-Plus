@@ -7,6 +7,7 @@ import myau.events.LoadWorldEvent;
 import myau.events.PacketEvent;
 import myau.events.Render3DEvent;
 import myau.events.TickEvent;
+import myau.mixin.IAccessorMinecraft;
 import myau.module.Module;
 import myau.module.modules.BackTrack;
 import myau.property.properties.BooleanProperty;
@@ -36,7 +37,6 @@ import net.minecraft.util.MathHelper;
 import java.awt.Color;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.lang.reflect.Field;
 
 public class TimerRange extends Module {
    private static final Minecraft mc = Minecraft.getMinecraft();
@@ -96,6 +96,8 @@ public class TimerRange extends Module {
    @Override
    public void onDisabled() {
       shouldResetTimer();
+      // shouldResetTimer() is conditional; never leave the game timer boosted when toggled off.
+      setTimerSpeed(1f);
       unblink();
       smartTick = 0;
       cooldownTick = 0;
@@ -107,7 +109,7 @@ public class TimerRange extends Module {
       confirmAttack = false;
    }
 
-   @EventTarget
+   @EventTarget(runWhenDisabled = true)
    public void onLoadWorld(LoadWorldEvent event) {
       if (blink.getValue()) {
          packetsReceived.clear();
@@ -417,38 +419,14 @@ public class TimerRange extends Module {
 
 
    private void setTimerSpeed(float speed) {
-      try {
-         Field timerField = null;
-         try { timerField = Minecraft.class.getDeclaredField("timer"); }
-         catch (NoSuchFieldException e) { timerField = Minecraft.class.getDeclaredField("field_71428_T"); }
-         timerField.setAccessible(true);
-         Object timerObj = timerField.get(mc);
-
-         Field speedField = null;
-         try { speedField = timerObj.getClass().getDeclaredField("timerSpeed"); }
-         catch (NoSuchFieldException e) { speedField = timerObj.getClass().getDeclaredField("field_74278_d"); }
-         speedField.setAccessible(true);
-         speedField.setFloat(timerObj, speed);
-      } catch (Exception e) {
-         e.printStackTrace();
+      net.minecraft.util.Timer timer = ((IAccessorMinecraft) mc).getTimer();
+      if (timer != null) {
+         timer.timerSpeed = speed;
       }
    }
 
    private float getTimerSpeed() {
-      try {
-         Field timerField = null;
-         try { timerField = Minecraft.class.getDeclaredField("timer"); }
-         catch (NoSuchFieldException e) { timerField = Minecraft.class.getDeclaredField("field_71428_T"); }
-         timerField.setAccessible(true);
-         Object timerObj = timerField.get(mc);
-
-         Field speedField = null;
-         try { speedField = timerObj.getClass().getDeclaredField("timerSpeed"); }
-         catch (NoSuchFieldException e) { speedField = timerObj.getClass().getDeclaredField("field_74278_d"); }
-         speedField.setAccessible(true);
-         return speedField.getFloat(timerObj);
-      } catch (Exception e) {
-         return 1.0f;
-      }
+      net.minecraft.util.Timer timer = ((IAccessorMinecraft) mc).getTimer();
+      return timer != null ? timer.timerSpeed : 1f;
    }
 }

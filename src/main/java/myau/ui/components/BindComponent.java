@@ -1,7 +1,6 @@
 package myau.ui.components;
 
 import myau.Myau;
-import myau.module.modules.ClickGUIModule;
 import myau.module.modules.HUD;
 import myau.ui.Component;
 import myau.ui.dataset.BindStage;
@@ -42,19 +41,27 @@ public class BindComponent implements Component {
         this.x = this.parentModule.category.getX();
     }
 
+    public boolean isBinding() {
+        return this.isBinding;
+    }
+
+    /**
+     * Called by the screen when a non-left mouse button is pressed anywhere while listening.
+     */
+    public void bindMouse(int button) {
+        this.parentModule.mod.setKey(KeyBindUtil.mouseButtonToKey(button));
+        this.isBinding = false;
+    }
+
     public void mouseDown(int x, int y, int button) {
         if (this.isHovered(x, y) && button == 0 && this.parentModule.panelExpand) {
             this.isBinding = !this.isBinding;
         } else if (this.isBinding && this.parentModule.panelExpand) {
-            int keyIndex = button - 100;
-            
             if (button == 0) {
                 this.isBinding = false;
                 return;
             }
-            
-            this.parentModule.mod.setKey(keyIndex);
-            this.isBinding = false;
+            bindMouse(button);
         }
     }
 
@@ -66,21 +73,15 @@ public class BindComponent implements Component {
     @Override
     public void keyTyped(char chatTyped, int keyCode) {
         if (this.isBinding) {
-            if (keyCode == 1) {
+            if (keyCode == Keyboard.KEY_ESCAPE) {
                 this.isBinding = false;
                 return;
             }
-            
-            if (keyCode == 11) { 
-                if (this.parentModule.mod instanceof ClickGUIModule) {
-                    this.parentModule.mod.setKey(54);
-                } else {
-                    this.parentModule.mod.setKey(0);
-                }
+            if (KeyBindUtil.isUnbindKey(keyCode)) {
+                this.parentModule.mod.setKey(KeyBindUtil.NONE);
             } else {
                 this.parentModule.mod.setKey(keyCode);
             }
-
             this.isBinding = false;
         }
     }

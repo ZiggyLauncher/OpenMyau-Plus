@@ -235,10 +235,18 @@ public class RiseModuleCard {
         }
     }
 
+    /**
+     * Called by the screen when a non-left mouse button is pressed anywhere while listening.
+     */
+    public void bindMouse(int mouseButton) {
+        module.setKey(KeyBindUtil.mouseButtonToKey(mouseButton));
+        bindingKey = false;
+    }
+
     public void key(char typedChar, int keyCode) {
         if (bindingKey) {
-            if (keyCode == Keyboard.KEY_ESCAPE || keyCode == Keyboard.KEY_DELETE) {
-                module.setKey(0);
+            if (KeyBindUtil.isUnbindKey(keyCode)) {
+                module.setKey(KeyBindUtil.NONE);
             } else {
                 module.setKey(keyCode);
             }

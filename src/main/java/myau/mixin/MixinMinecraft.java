@@ -1,6 +1,7 @@
 package myau.mixin;
 
 import myau.Myau;
+import myau.config.Config;
 import myau.init.Initializer;
 import myau.event.EventManager;
 import myau.event.types.EventType;
@@ -16,8 +17,10 @@ import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.entity.player.InventoryPlayer;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
+import org.lwjgl.input.Keyboard;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -102,7 +105,21 @@ public abstract class MixinMinecraft {
             at = {@At("HEAD")}
     )
     private void loadWorld(WorldClient worldClient, String string, CallbackInfo callbackInfo) {
+        // Snapshot the module state before modules reset themselves for the new/no world.
+        Config.autoSave();
         EventManager.call(new LoadWorldEvent());
+    }
+
+    /**
+     * shutdown() is the first thing both "Quit Game" and closing the window call, while the
+     * world and every module's live state are still intact.
+     */
+    @Inject(
+            method = {"shutdown"},
+            at = {@At("HEAD")}
+    )
+    private void shutdown(CallbackInfo callbackInfo) {
+        Myau.onShutdownRequested();
     }
 
     @Inject(
@@ -164,9 +181,50 @@ public abstract class MixinMinecraft {
             )
     )
     private void setKeyBindState(int integer, boolean boolean2) {
+        int button = integer + 100;
+        if (button >= 3 && button < myau$sideButtonDown.length) {
+            myau$handleSideButton(integer, button, boolean2);
+            return;
+        }
         KeyBinding.setKeyBindState(integer, boolean2);
-        if (boolean2 && this.currentScreen == null) {
+        // Keyboard repeat events (left enabled by some screens) are not new presses.
+        if (boolean2 && this.currentScreen == null && !(integer > 0 && Keyboard.isRepeatEvent())) {
             EventManager.call(new KeyEvent(integer));
+        }
+    }
+
+    /** What we believe each mouse side button's physical state is, indexed by LWJGL button. */
+    @Unique
+    private final boolean[] myau$sideButtonDown = new boolean[16];
+
+    /**
+     * LWJGL's Windows handler decides which side button went down with {@code (wParam & 0xFF) == MK_XBUTTON1},
+     * but that byte also carries every other held button and modifier: pressing side button 1 while
+     * holding LMB, Shift or Ctrl is reported as side button 2. The release is decoded correctly, and
+     * it never matches the bogus press, so LWJGL's own button state for the wrong button stays stuck
+     * "down". Side-button binds therefore toggle on release, using the true button, and an orphan
+     * release corrects the phantom press.
+     */
+    @Unique
+    private void myau$handleSideButton(int key, int button, boolean pressed) {
+        if (pressed) {
+            myau$sideButtonDown[button] = true;
+            KeyBinding.setKeyBindState(key, true);
+            return;
+        }
+        if (!myau$sideButtonDown[button]) {
+            // Released a button we never saw pressed: the press was attributed to another side button.
+            for (int other = 3; other < myau$sideButtonDown.length; other++) {
+                if (other != button && myau$sideButtonDown[other]) {
+                    myau$sideButtonDown[other] = false;
+                    KeyBinding.setKeyBindState(other - 100, false);
+                }
+            }
+        }
+        myau$sideButtonDown[button] = false;
+        KeyBinding.setKeyBindState(key, false);
+        if (this.currentScreen == null) {
+            EventManager.call(new KeyEvent(key));
         }
     }
 

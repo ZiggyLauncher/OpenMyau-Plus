@@ -69,7 +69,7 @@ public class AutoAuth extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onWorld(LoadWorldEvent event) {
         clearQueue();
     }

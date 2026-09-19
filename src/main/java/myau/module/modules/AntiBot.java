@@ -260,7 +260,7 @@ public class AntiBot extends Module {
         if (target instanceof EntityLivingBase) hit.add(target.getEntityId());
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         clearAll();
     }

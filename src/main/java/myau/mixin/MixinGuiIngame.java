@@ -2,6 +2,7 @@ package myau.mixin;
 
 import myau.Myau;
 import myau.module.modules.AutoBlockIn;
+import myau.module.modules.HotbarText;
 import myau.module.modules.RenderFixes;
 import myau.module.modules.Scaffold;
 import net.minecraft.client.gui.ScaledResolution;
@@ -32,6 +33,16 @@ public abstract class MixinGuiIngame {
         if (Myau.moduleManager != null) {
             myau.module.modules.Hotbar hotbar = (myau.module.modules.Hotbar) Myau.moduleManager.modules.get(myau.module.modules.Hotbar.class);
             if (hotbar != null && hotbar.isEnabled()) {
+                callbackInfo.cancel();
+            }
+        }
+    }
+
+    @Inject(method = "renderSelectedItem", at = @At("HEAD"), cancellable = true)
+    private void myau$renderSelectedItem(ScaledResolution scaledRes, CallbackInfo callbackInfo) {
+        if (Myau.moduleManager != null) {
+            HotbarText hotbarText = (HotbarText) Myau.moduleManager.modules.get(HotbarText.class);
+            if (hotbarText != null && hotbarText.shouldHideVanilla()) {
                 callbackInfo.cancel();
             }
         }

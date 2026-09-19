@@ -75,7 +75,7 @@ public class InvManager extends Module {
         super("InvManager", false);
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onUpdate(UpdateEvent event) {
         if (event.getType() == EventType.PRE) {
             if (this.actionDelay > 0) {
@@ -250,7 +250,7 @@ public class InvManager extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onClick(WindowClickEvent event) {
         this.actionDelay = RandomUtils.nextInt(this.minDelay.getValue() + 1, this.maxDelay.getValue() + 2);
     }

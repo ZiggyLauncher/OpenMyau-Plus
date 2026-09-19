@@ -481,12 +481,12 @@ public class HUD extends Module {
         RenderUtil.drawRect(x, y1, x + width, y2, color);
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onRender2D(Render2DEvent event) {
         // Update font renderer to ensure it uses current setting
         updateFontRenderer();
         
-        if (this.chatOutline.getValue() && mc.currentScreen instanceof GuiChat) {
+        if (this.isEnabled() && this.chatOutline.getValue() && mc.currentScreen instanceof GuiChat) {
             String text = ((IAccessorGuiChat) mc.currentScreen).getInputField().getText().trim();
             if (Myau.commandManager != null && Myau.commandManager.isTypingCommand(text)) {
                 RenderUtil.enableRenderState();

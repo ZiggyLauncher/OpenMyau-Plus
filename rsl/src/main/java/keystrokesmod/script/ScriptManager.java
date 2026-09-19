@@ -455,6 +455,7 @@ public class ScriptManager {
         try {
             myau.ui.ClickGui.resetInstance();
             myau.ui.impl.clickgui.cheadle.CheadleClickGui.resetInstance();
+            myau.ui.impl.clickgui.raven.RavenClickGui.resetInstance();
             myau.ui.impl.clickgui.normal.ClickGuiScreen.resetInstance();
             myau.ui.impl.clickgui.rise.RiseClickGUI.resetInstance();
             myau.ui.impl.clickgui.modern.ModernClickGui.resetInstance();

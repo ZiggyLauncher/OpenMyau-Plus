@@ -137,7 +137,7 @@ public class Statistics extends Module {
         return new Color(color.getRed(), color.getGreen(), color.getBlue(), (int) (alpha * 255));
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onPacket(PacketEvent event) {
         if (event.getType() == EventType.RECEIVE) {
             if (event.getPacket() instanceof S02PacketChat) {
@@ -163,7 +163,7 @@ public class Statistics extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onTick(TickEvent event) {
         if (mc.currentScreen instanceof GuiMainMenu
                 || mc.currentScreen instanceof GuiMultiplayer

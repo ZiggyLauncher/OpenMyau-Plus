@@ -34,8 +34,9 @@ public class ConfigCommand extends Command {
         if (args.size() < 2) {
             String command = args.get(0).toLowerCase(Locale.ROOT);
             ChatUtil.sendFormatted(
-                    String.format("%sUsage: .%s &oload&r/&osave&r <&oname&r> | .%s &olist&r | .%s &ofolder&r", Myau.clientName, command, command, command)
+                    String.format("%sUsage: .%s &oload&r/&osave&r <&oname&r> | .%s &osave&r | .%s &olist&r | .%s &ofolder&r", Myau.clientName, command, command, command, command)
             );
+            ChatUtil.sendFormatted(String.format("%sCurrent config: &a&o%s&r (a bare .%s save writes here)&r", Myau.clientName, Config.lastConfig, command));
         } else {
             String subCommand = args.get(1);
             if (subCommand.equalsIgnoreCase("l")) {
@@ -56,10 +57,16 @@ public class ConfigCommand extends Command {
                 case "s":
                 case "save":
                     if (args.size() < 3) {
-                        new Config(Config.lastConfig, true).save();
+                        // No name: write the live state back into the config the user is in.
+                        Config.current().save();
                         return;
                     }
                     new Config(args.get(2), true).save();
+                    return;
+                case "current":
+                case "cur":
+                case "which":
+                    ChatUtil.sendFormatted(String.format("%sCurrent config: &a&o%s&r&r", Myau.clientName, Config.lastConfig));
                     return;
                 case "list":
                     try {
@@ -73,8 +80,10 @@ public class ConfigCommand extends Command {
                         Arrays.sort(configs, LastModifiedFileComparator.LASTMODIFIED_REVERSE);
                         ChatUtil.sendFormatted(String.format("%sConfigs:&r", Myau.clientName));
                         for (File file : configs) {
-                            String formatted = ChatColors.formatColor(String.format("&7»&r &o%s&r", file.getName()));
-                            String config = String.format(".config load %s", FilenameUtils.removeExtension(file.getName()));
+                            String baseName = FilenameUtils.removeExtension(file.getName());
+                            boolean current = Config.normalizeName(baseName).equals(Config.lastConfig);
+                            String formatted = ChatColors.formatColor(String.format("&7»&r &o%s&r%s", file.getName(), current ? " &a(current)&r" : ""));
+                            String config = String.format(".config load %s", baseName);
                             ChatUtil.send(
                                     new ChatComponentText(formatted)
                                             .setChatStyle(

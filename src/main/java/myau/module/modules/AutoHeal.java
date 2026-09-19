@@ -77,6 +77,16 @@ public class AutoHeal extends Module {
         return this.prevSlot != -1;
     }
 
+    @Override
+    public void onDisabled() {
+        // Don't leave the hotbar on the healing slot if toggled off between PRE and POST.
+        if (this.prevSlot != -1 && mc.thePlayer != null) {
+            mc.thePlayer.inventory.currentItem = this.prevSlot;
+        }
+        this.prevSlot = -1;
+        this.shouldHeal = false;
+    }
+
     @EventTarget(Priority.HIGH)
     public void onTick(TickEvent event) {
         if (!this.isEnabled()) {

@@ -39,7 +39,7 @@ public class Blink extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onWorldLoad(LoadWorldEvent event) {
         this.setEnabled(false);
     }

@@ -93,7 +93,7 @@ public class AutoClicker extends Module {
         super("AutoClicker", false);
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onTick(TickEvent event) {
         if (event.getType() == EventType.PRE) {
             if (this.clickDelay > 0L) {
@@ -121,6 +121,7 @@ public class AutoClicker extends Module {
                             this.clickDelay = this.clickDelay + this.getNextClickDelay();
                             KeyBindUtil.setKeyBindState(mc.gameSettings.keyBindAttack.getKeyCode(), false);
                             KeyBindUtil.pressKeyOnce(mc.gameSettings.keyBindAttack.getKeyCode());
+                            Keystrokes.notifyInjectedClick(true);
                         }
                     }
                     if (this.blockHit.getValue()
@@ -132,6 +133,7 @@ public class AutoClicker extends Module {
                         if (!mc.thePlayer.isUsingItem()) {
                             this.blockHitDelay = this.blockHitDelay + this.getBlockHitDelay();
                             KeyBindUtil.pressKeyOnce(mc.gameSettings.keyBindUseItem.getKeyCode());
+                            Keystrokes.notifyInjectedClick(false);
                         }
                     }
                 }

@@ -38,7 +38,8 @@ public class DelayManager {
         } else if (PacketUtil.isWorldRenderPacket(packet)) {
             return false;
         } else if (!(packet instanceof S01PacketJoinGame) && !(packet instanceof S07PacketRespawn)) {
-            if (packet instanceof S19PacketEntityStatus) {
+            if (packet instanceof S19PacketEntityStatus && mc.theWorld != null) {
+                // Runs on the Netty thread: a throw here disconnects the player with "Internal Exception".
                 S19PacketEntityStatus s19 = (S19PacketEntityStatus) packet;
                 Entity entity = s19.getEntity(mc.theWorld);
                 if (entity != null && (!entity.equals(mc.thePlayer) || s19.getOpCode() != 2)) {

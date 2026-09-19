@@ -2,11 +2,14 @@ package myau.ui.impl.clickgui.cheadle;
 
 import com.google.gson.GsonBuilder;
 import myau.module.modules.ClickGUIModule;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import myau.Myau;
 import myau.font.impl.UFontRenderer;
 import myau.module.Module;
+import myau.ui.ModuleCategories;
+import myau.util.KeyBindUtil;
 import myau.module.modules.HUD;
 import myau.property.Property;
 import myau.property.properties.*;
@@ -39,36 +42,6 @@ public class CheadleClickGui extends GuiScreen {
     private final File configFile = new File("./config/Myau/", "clickgui_cheadle.txt");
     private final ArrayList<CategoryComponent> categoryList;
 
-    // ── Category name sets (normalized) ───────────────────────────────────────
-    private static final Set<String> COMBAT = set(
-            "AimAssist", "AutoClicker", "KillAura", "Wtap", "Velocity", "Reach", "TargetStrafe", "NoHitDelay",
-            "AntiFireball", "LagRange", "MoveFix", "ServerLag", "KnockbackDelay", "HitBox", "MoreKB", "Refill",
-            "HitSelect", "BackTrack", "Hitflick", "TimerRange", "ClickAssits", "Criticals", "BlockHit",
-            "SprintReset", "Displace", "TickBase", "Piercing", "Stasis");
-    private static final Set<String> MOVEMENT = set(
-            "AntiAFK", "Fly", "FastBow", "Speed", "LongJump", "Sprint", "SafeWalk", "Jesus", "Blink", "NoFall",
-            "NoSlow", "KeepSprint", "Eagle", "NoJumpDelay", "AntiVoid", "Timer");
-    private static final Set<String> RENDER = set(
-            "ESP", "Chams", "FullBright", "Tracers", "NameTags", "Xray", "TargetESP", "TargetHUD", "Indicators",
-            "BedESP", "ItemESP", "BreakProgress", "ViewClip", "NoHurtCam", "HUD", "Notifications", "RiseClickGUI",
-            "ClickGUI", "ChestESP", "Trajectories", "Radar", "RenderFixes", "FPScounter", "WaterMark", "WaterMark2",
-            "HitParticleEffects", "DynamicIsland", "ESP2D", "TeamHealthDisplay", "Statistics", "Animations",
-            "BlockOverlay", "Ambience", "Capes", "FreeLook", "ItemPhysics");
-    private static final Set<String> PLAYER = set(
-            "AutoHeal", "FakeLag", "AutoTool", "ChestStealer", "AutoBedDef", "InvManager", "InvWalk", "Scaffold",
-            "AutoBlockIn", "AutoSwap", "SpeedMine", "FastPlace", "GhostHand", "MCF", "AntiDebuff", "FlagDetector",
-            "AutoGapple", "ChestAura", "AutoHeadHitter", "ThrowAura", "AutoAuth");
-
-    private static Set<String> set(String... names) {
-        Set<String> s = new HashSet<>();
-        for (String n : names) s.add(norm(n));
-        return s;
-    }
-
-    private static String norm(String s) {
-        return s == null ? "" : s.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
-    }
-
     private static UFontRenderer font() {
         return Myau.fontManagers.getFont(16);
     }
@@ -76,81 +49,16 @@ public class CheadleClickGui extends GuiScreen {
     public CheadleClickGui() {
         instance = this;
 
-        List<Module> combatModules = new ArrayList<>();
-        List<Module> movementModules = new ArrayList<>();
-        List<Module> renderModules = new ArrayList<>();
-        List<Module> playerModules = new ArrayList<>();
-        List<Module> miscModules = new ArrayList<>();
-        List<Module> scriptModules = new ArrayList<>();
-
-        for (Module module : Myau.moduleManager.allModules()) {
-            if (module instanceof myau.module.modules.ScriptModule) {
-                scriptModules.add(module);
-                continue;
-            }
-            String n = norm(module.getName());
-            if (COMBAT.contains(n)) {
-                combatModules.add(module);
-            } else if (MOVEMENT.contains(n)) {
-                movementModules.add(module);
-            } else if (RENDER.contains(n)) {
-                renderModules.add(module);
-            } else if (PLAYER.contains(n)) {
-                playerModules.add(module);
-            } else {
-                miscModules.add(module);
-            }
-        }
-
-        Comparator<Module> comparator = Comparator.comparing(m -> m.getName().toLowerCase());
-
         this.categoryList = new ArrayList<>();
         int xOffset = 105;
         int spacing = 105;
-
-        List<Module> combat = new ArrayList<>(combatModules);
-        combat.removeIf(m -> m == null);
-        combat.sort(comparator);
-        CategoryComponent combatCat = new CategoryComponent("combat", combat);
-        combatCat.setX(xOffset);
-        combatCat.setY(25);
-        categoryList.add(combatCat);
-        xOffset += spacing;
-
-        List<Module> movement = new ArrayList<>(movementModules);
-        movement.removeIf(m -> m == null);
-        movement.sort(comparator);
-        CategoryComponent movementCat = new CategoryComponent("movement", movement);
-        movementCat.setX(xOffset);
-        movementCat.setY(25);
-        categoryList.add(movementCat);
-        xOffset += spacing;
-
-        List<Module> render = new ArrayList<>(renderModules);
-        render.removeIf(m -> m == null);
-        render.sort(comparator);
-        CategoryComponent renderCat = new CategoryComponent("render", render);
-        renderCat.setX(xOffset);
-        renderCat.setY(25);
-        categoryList.add(renderCat);
-        xOffset += spacing;
-
-        List<Module> player = new ArrayList<>(playerModules);
-        player.removeIf(m -> m == null);
-        player.sort(comparator);
-        CategoryComponent playerCat = new CategoryComponent("player", player);
-        playerCat.setX(xOffset);
-        playerCat.setY(25);
-        categoryList.add(playerCat);
-        xOffset += spacing;
-
-        List<Module> misc = new ArrayList<>(miscModules);
-        misc.removeIf(m -> m == null);
-        misc.sort(comparator);
-        CategoryComponent miscCat = new CategoryComponent("misc", misc);
-        miscCat.setX(xOffset);
-        miscCat.setY(25);
-        categoryList.add(miscCat);
+        for (ModuleCategories.Category category : ModuleCategories.Category.values()) {
+            CategoryComponent categoryComponent = new CategoryComponent(category.getLabel().toLowerCase(Locale.ROOT), ModuleCategories.modules(category));
+            categoryComponent.setX(xOffset);
+            categoryComponent.setY(25);
+            categoryList.add(categoryComponent);
+            xOffset += spacing;
+        }
 
         loadPositions();
     }
@@ -189,30 +97,35 @@ public class CheadleClickGui extends GuiScreen {
     }
 
     public void mouseClicked(int x, int y, int mouseButton) {
-        Iterator<CategoryComponent> btnCat = categoryList.iterator();
-        while (true) {
-            CategoryComponent category;
-            do {
-                do {
-                    if (!btnCat.hasNext()) {
-                        return;
-                    }
+        BindComponent binding = bindingComponent();
+        if (binding != null) {
+            if (KeyBindUtil.isBindableMouseButton(mouseButton)) {
+                binding.bindMouse(mouseButton);
+            } else {
+                binding.isBinding = false;
+            }
+            return;
+        }
+        if (clickGuiModule() != null && clickGuiModule().isCloseMouseButton(mouseButton)) {
+            clickGuiModule().setEnabled(false);
+            return;
+        }
+        for (CategoryComponent category : categoryList) {
+            if (category.insideArea(x, y) && !category.isHovered(x, y) && mouseButton == 0) {
+                category.mousePressed(true);
+                category.xx = x - category.getX();
+                category.yy = y - category.getY();
+            }
 
-                    category = btnCat.next();
-                    if (category.insideArea(x, y) && !category.isHovered(x, y) && mouseButton == 0) {
-                        category.mousePressed(true);
-                        category.xx = x - category.getX();
-                        category.yy = y - category.getY();
-                    }
+            if (category.isHovered(x, y) && mouseButton == 0) {
+                category.setOpened(!category.isOpened());
+            }
 
-                    if (category.isHovered(x, y) && mouseButton == 0) {
-                        category.setOpened(!category.isOpened());
-                    }
-                } while (!category.isOpened());
-            } while (category.getModules().isEmpty());
-
-            for (Component c : category.getModules()) {
-                c.mouseDown(x, y, mouseButton);
+            // Only the clipped module list can be clicked; scrolled-out modules must never react.
+            if (category.isInsideContent(x, y)) {
+                for (Component c : category.getModules()) {
+                    c.mouseDown(x, y, mouseButton);
+                }
             }
         }
     }
@@ -248,7 +161,13 @@ public class CheadleClickGui extends GuiScreen {
     }
 
     public void keyTyped(char typedChar, int key) {
-        if (key == 1) {
+        BindComponent binding = bindingComponent();
+        if (binding != null) {
+            binding.keyTyped(typedChar, key);
+            return;
+        }
+        ClickGUIModule clickGUIModule = clickGuiModule();
+        if (key == Keyboard.KEY_ESCAPE || (clickGUIModule != null && clickGUIModule.isCloseKey(key))) {
             mc.displayGuiScreen(null);
         } else {
             Iterator<CategoryComponent> btnCat = categoryList.iterator();
@@ -306,18 +225,41 @@ public class CheadleClickGui extends GuiScreen {
     private void loadPositions() {
         if (!configFile.exists()) return;
         try (FileReader reader = new FileReader(configFile)) {
-            JsonObject json = new JsonParser().parse(reader).getAsJsonObject();
+            JsonElement parsed = new JsonParser().parse(reader);
+            if (parsed == null || !parsed.isJsonObject()) return;
+            JsonObject json = parsed.getAsJsonObject();
             for (CategoryComponent cat : categoryList) {
-                if (json.has(cat.getName())) {
+                if (json.has(cat.getName()) && json.get(cat.getName()).isJsonObject()) {
                     JsonObject pos = json.getAsJsonObject(cat.getName());
-                    cat.setX(pos.get("x").getAsInt());
-                    cat.setY(pos.get("y").getAsInt());
-                    cat.setOpened(pos.get("open").getAsBoolean());
+                    if (pos.has("x")) cat.setX(pos.get("x").getAsInt());
+                    if (pos.has("y")) cat.setY(pos.get("y").getAsInt());
+                    if (pos.has("open")) cat.setOpened(pos.get("open").getAsBoolean());
                 }
             }
-        } catch (IOException e) {
+        } catch (Exception e) {
+            // A truncated/corrupt layout file must never keep the GUI from opening.
             e.printStackTrace();
         }
+    }
+
+    private ClickGUIModule clickGuiModule() {
+        Module module = Myau.moduleManager.getModule("ClickGUI");
+        return module instanceof ClickGUIModule ? (ClickGUIModule) module : null;
+    }
+
+    private BindComponent bindingComponent() {
+        for (CategoryComponent category : categoryList) {
+            for (Component component : category.getModules()) {
+                if (component instanceof ModuleComponent) {
+                    for (Component setting : ((ModuleComponent) component).settings) {
+                        if (setting instanceof BindComponent && ((BindComponent) setting).isBinding) {
+                            return (BindComponent) setting;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     // ==================== INNER COMPONENT INTERFACE ====================
@@ -412,7 +354,6 @@ public class CheadleClickGui extends GuiScreen {
 
         public void render(FontRenderer renderer) {
             this.width = 95;
-            update();
 
             long currentTime = System.currentTimeMillis();
             float deltaTime = (currentTime - lastFrameTime) / 1000F;
@@ -429,6 +370,7 @@ public class CheadleClickGui extends GuiScreen {
             if (scroll > maxScroll) scroll = maxScroll;
             if (animScroll > maxScroll) animScroll = maxScroll;
             animScroll += (scroll - animScroll) * 0.2;
+            update();
 
             if (!this.modulesInCategory.isEmpty() && openAnimation > 0.01F) {
                 int displayHeight = Math.min(height, MAX_HEIGHT);
@@ -472,8 +414,6 @@ public class CheadleClickGui extends GuiScreen {
                     int compHeight = c2.getHeight();
                     if (renderHeight + compHeight > animScroll &&
                             renderHeight < animScroll + MAX_HEIGHT) {
-                        int drawY = (int) (renderHeight - animScroll);
-                        c2.setComponentStartAt(this.bh + drawY);
                         c2.draw(new AtomicInteger(0));
                     }
                     renderHeight += compHeight;
@@ -497,12 +437,29 @@ public class CheadleClickGui extends GuiScreen {
             }
         }
 
+        /**
+         * Lays out every module at its scrolled position. Modules scrolled out of view get offsets
+         * outside the viewport; if they kept unscrolled offsets they'd overlap the visible ones and
+         * a single click would toggle several modules.
+         */
         public void update() {
-            int offset = this.bh;
+            int offset = this.bh - (int) animScroll;
             for (Component component : this.modulesInCategory) {
                 component.setComponentStartAt(offset);
                 offset += component.getHeight();
             }
+        }
+
+        /**
+         * The clipped area the module list is drawn in - the only place clicks can hit a module.
+         */
+        public boolean isInsideContent(int x, int y) {
+            if (!this.categoryOpened || this.modulesInCategory.isEmpty()) {
+                return false;
+            }
+            int top = this.y + this.bh;
+            int bottom = top + Math.min(height, MAX_HEIGHT);
+            return x >= this.x && x <= this.x + this.width && y >= top && y <= bottom;
         }
 
         public int getX() {
@@ -571,8 +528,9 @@ public class CheadleClickGui extends GuiScreen {
             this.settings = new ArrayList<>();
             this.panelExpand = false;
             int y = offsetY + 10;
-            if (!Myau.propertyManager.properties.get(mod).isEmpty()) {
-                for (Property<?> baseProperty : Myau.propertyManager.properties.get(mod)) {
+            java.util.List<Property<?>> properties = Myau.propertyManager.properties.get(mod);
+            if (properties != null && !properties.isEmpty()) {
+                for (Property<?> baseProperty : properties) {
                     if (baseProperty instanceof BooleanProperty) {
                         CheckBoxComponent c = new CheckBoxComponent((BooleanProperty) baseProperty, this, y);
                         this.settings.add(c);
@@ -765,7 +723,7 @@ public class CheadleClickGui extends GuiScreen {
         public void draw(AtomicInteger offset) {
             GL11.glPushMatrix();
             GL11.glScaled(0.5D, 0.5D, 0.5D);
-            this.renderText(this.isBinding ? "Press a key..." : "Bind" + ": " + Keyboard.getKeyName(this.parentModule.mod.getKey()),
+            this.renderText(this.isBinding ? "Press a key..." : "Bind" + ": " + KeyBindUtil.getKeyName(this.parentModule.mod.getKey()),
                     ((HUD) Myau.moduleManager.modules.get(HUD.class)).getColor(System.currentTimeMillis(), offset.get()));
             GL11.glPopMatrix();
         }
@@ -781,17 +739,21 @@ public class CheadleClickGui extends GuiScreen {
             }
         }
 
+        /**
+         * Called by the screen when a non-left mouse button is pressed anywhere while listening.
+         */
+        public void bindMouse(int button) {
+            this.parentModule.mod.setKey(KeyBindUtil.mouseButtonToKey(button));
+            this.isBinding = false;
+        }
+
         public void mouseReleased(int x, int y, int button) {
         }
 
         public void keyTyped(char chatTyped, int keyCode) {
             if (this.isBinding) {
-                if (keyCode == 11) {
-                    if (this.parentModule.mod instanceof ClickGUIModule) {
-                        this.parentModule.mod.setKey(54);
-                    } else {
-                        this.parentModule.mod.setKey(0);
-                    }
+                if (KeyBindUtil.isUnbindKey(keyCode)) {
+                    this.parentModule.mod.setKey(KeyBindUtil.NONE);
                 } else {
                     this.parentModule.mod.setKey(keyCode);
                 }

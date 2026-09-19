@@ -3,6 +3,7 @@ package myau.event;
 import myau.event.events.Event;
 import myau.event.events.EventStoppable;
 import myau.event.types.Priority;
+import myau.module.Module;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -102,7 +103,10 @@ public final class EventManager {
     private static void register(Method method, Object object) {
         Class<? extends Event> indexClass = (Class<? extends Event>) method.getParameterTypes()[0];
         //New MethodData from the Method we are registering.
-        final MethodData data = new MethodData(object, method, method.getAnnotation(EventTarget.class).value());
+        final EventTarget target = method.getAnnotation(EventTarget.class);
+        //Module handlers only run while the module is enabled, unless explicitly opted out.
+        final boolean gated = object instanceof Module && !target.runWhenDisabled();
+        final MethodData data = new MethodData(object, method, target.value(), gated);
         //Set's the method to accessible so that we can also invoke it if it's protected or private.
         if (!data.getTarget().isAccessible()) {
             data.getTarget().setAccessible(true);
@@ -237,6 +241,9 @@ public final class EventManager {
      * @param argument The called Event which should be used as an argument for the targeted Method.
      */
     private static void invoke(MethodData data, Event argument) {
+        if (data.isGated() && !((Module) data.getSource()).isEnabled()) {
+            return;
+        }
         try {
             data.getTarget().invoke(data.getSource(), argument);
         } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
@@ -252,6 +259,7 @@ public final class EventManager {
         private final Object source;
         private final Method target;
         private final byte priority;
+        private final boolean gated;
 
         /**
          * Sets the values of the data.
@@ -262,10 +270,18 @@ public final class EventManager {
          * @param priority The priority of this Method. Used by the registry to sort
          *                 the data on.
          */
-        public MethodData(Object source, Method target, byte priority) {
+        public MethodData(Object source, Method target, byte priority, boolean gated) {
             this.source = source;
             this.target = target;
             this.priority = priority;
+            this.gated = gated;
+        }
+
+        /**
+         * @return True if this handler belongs to a Module and must be skipped while that Module is disabled.
+         */
+        public boolean isGated() {
+            return gated;
         }
 
         /**

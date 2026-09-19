@@ -89,7 +89,7 @@ public class ChestStealer extends Module {
         super("ChestStealer", false);
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onUpdate(UpdateEvent event) {
         if (event.getType() == EventType.PRE) {
             if (this.clickDelay > 0) {
@@ -254,7 +254,7 @@ public class ChestStealer extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onWindowClick(WindowClickEvent event) {
         this.clickDelay = RandomUtils.nextInt(this.minDelay.getValue() + 1, this.maxDelay.getValue() + 2);
     }

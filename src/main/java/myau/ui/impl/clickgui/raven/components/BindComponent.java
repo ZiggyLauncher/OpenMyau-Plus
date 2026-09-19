@@ -3,10 +3,10 @@ package myau.ui.impl.clickgui.raven.components;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.opengl.GL11;
 import myau.Myau;
-import myau.module.modules.ClickGUIModule;
 import myau.module.modules.HUD;
 import myau.ui.impl.clickgui.raven.Component;
 import myau.ui.impl.clickgui.raven.dataset.BindStage;
+import myau.util.KeyBindUtil;
 
 import java.awt.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,7 +29,7 @@ public class BindComponent implements Component {
     public void draw(AtomicInteger offset) {
         GL11.glPushMatrix();
         GL11.glScaled(0.5D, 0.5D, 0.5D);
-        this.renderText(this.isBinding ? BindStage.binding : BindStage.bind + ": " + Keyboard.getKeyName(this.parentModule.mod.getKey()), ((HUD) Myau.moduleManager.modules.get(HUD.class)).getColor(System.currentTimeMillis(), offset.get()));
+        this.renderText(this.isBinding ? BindStage.binding : BindStage.bind + ": " + KeyBindUtil.getKeyName(this.parentModule.mod.getKey()), ((HUD) Myau.moduleManager.modules.get(HUD.class)).getColor(System.currentTimeMillis(), offset.get()));
         GL11.glPopMatrix();
     }
 
@@ -56,15 +56,25 @@ public class BindComponent implements Component {
 
     }
 
+    /**
+     * Called by the screen when a non-left mouse button is pressed anywhere while listening.
+     */
+    public void bindMouse(int button) {
+        this.parentModule.mod.setKey(KeyBindUtil.mouseButtonToKey(button));
+        this.isBinding = false;
+        isAnyBinding = false;
+    }
+
+    public void cancelBinding() {
+        this.isBinding = false;
+        isAnyBinding = false;
+    }
+
     @Override
     public void keyTyped(char chatTyped, int keyCode) {
         if (this.isBinding) {
-            if (keyCode == 1 || keyCode == 14) {
-                if (this.parentModule.mod instanceof ClickGUIModule) {
-                    this.parentModule.mod.setKey(54);
-                } else {
-                    this.parentModule.mod.setKey(0);
-                }
+            if (KeyBindUtil.isUnbindKey(keyCode)) {
+                this.parentModule.mod.setKey(KeyBindUtil.NONE);
             } else {
                 this.parentModule.mod.setKey(keyCode);
             }
@@ -100,7 +110,7 @@ public class BindComponent implements Component {
     public void render() {
         GL11.glPushMatrix();
         GL11.glScaled(0.5D, 0.5D, 0.5D);
-        String text = this.isBinding ? "Press a key..." : "Bind: " + Keyboard.getKeyName(this.parentModule.mod.getKey());
+        String text = this.isBinding ? "Press a key..." : "Bind: " + KeyBindUtil.getKeyName(this.parentModule.mod.getKey());
         Myau.fontManagers.getFont(24).drawString(text,
                 (float) ((this.parentModule.category.getX() + 4) * 2),
                 (float) ((this.parentModule.category.getModuleY() + this.offsetY + 3) * 2),

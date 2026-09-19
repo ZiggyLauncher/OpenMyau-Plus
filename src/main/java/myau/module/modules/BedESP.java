@@ -151,7 +151,7 @@ public class BedESP extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         this.beds.clear();
     }

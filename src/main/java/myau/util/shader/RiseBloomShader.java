@@ -117,14 +117,21 @@ public final class RiseBloomShader {
         return true;
     }
 
+    private static boolean programUnavailable;
+
     private static boolean ensureProgram() {
         if (programId != 0) {
             return true;
+        }
+        // Don't recompile (and re-log) every frame once the driver has rejected the shader.
+        if (programUnavailable) {
+            return false;
         }
 
         int fragment = compileShader(BLOOM_SHADER, GL20.GL_FRAGMENT_SHADER);
         int vertex = compileShader(VERTEX_SHADER, GL20.GL_VERTEX_SHADER);
         if (fragment == 0 || vertex == 0) {
+            programUnavailable = true;
             return false;
         }
 
@@ -139,6 +146,7 @@ public final class RiseBloomShader {
             System.err.println("Rise bloom shader failed to link: " + GL20.glGetProgramInfoLog(programId, 4096));
             GL20.glDeleteProgram(programId);
             programId = 0;
+            programUnavailable = true;
             return false;
         }
         return true;

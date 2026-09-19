@@ -359,7 +359,7 @@ public class BedNuker extends Module {
         return this.targetBed != null && this.breaking;
     }
 
-    @EventTarget(Priority.HIGH)
+    @EventTarget(value = Priority.HIGH, runWhenDisabled = true)
     public void onTick(TickEvent event) {
         if (event.getType() == EventType.PRE) {
             this.runPendingWhitelistScan();
@@ -569,7 +569,7 @@ public class BedNuker extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         this.waitingForStart = false;
         this.whitelistScanAt = -1L;
@@ -577,7 +577,7 @@ public class BedNuker extends Module {
         this.resetBreaking();
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onPacket(PacketEvent event) {
         if (!event.isCancelled()) {
             if (event.getPacket() instanceof S02PacketChat) {

@@ -21,20 +21,27 @@ public class KawaseBloom {
     private static ShaderUtils kawaseUp;
     private static int currentIterations;
 
+    private static boolean shadersUnavailable;
+
     private static void initShaders() {
+        if (shadersUnavailable) {
+            return;
+        }
         if (kawaseDown == null) {
             try {
                 kawaseDown = new ShaderUtils("kawaseDownBloom");
             } catch (Exception e) {
-                System.err.println("Failed to initialize kawaseDownBloom shader: " + e.getMessage());
+                shadersUnavailable = true;
+                System.err.println("Failed to initialize kawaseDownBloom shader (blur disabled): " + e.getMessage());
                 e.printStackTrace();
             }
         }
-        if (kawaseUp == null) {
+        if (kawaseUp == null && !shadersUnavailable) {
             try {
                 kawaseUp = new ShaderUtils("kawaseUpBloom");
             } catch (Exception e) {
-                System.err.println("Failed to initialize kawaseUpBloom shader: " + e.getMessage());
+                shadersUnavailable = true;
+                System.err.println("Failed to initialize kawaseUpBloom shader (blur disabled): " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -78,7 +85,6 @@ public class KawaseBloom {
 
         // Check if shaders are properly initialized
         if (kawaseDown == null || kawaseUp == null) {
-            System.err.println("KawaseBloom shaders not initialized, skipping bloom render");
             return;
         }
 

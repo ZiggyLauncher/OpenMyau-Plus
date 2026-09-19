@@ -70,7 +70,7 @@ public class ServerLag extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         this.releaseAllPackets();
     }

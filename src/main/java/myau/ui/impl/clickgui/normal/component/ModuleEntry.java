@@ -200,13 +200,17 @@ public class ModuleEntry extends Component {
     }
 
     public boolean isBinding() {
+        return bindingComponent() != null;
+    }
+
+    public KeybindComponent bindingComponent() {
         if (expanded) {
             for (Component comp : propertiesComponents) {
                 if (!isComponentVisible(comp)) continue;
-                if (comp instanceof KeybindComponent && ((KeybindComponent) comp).isBinding()) return true;
+                if (comp instanceof KeybindComponent && ((KeybindComponent) comp).isBinding()) return (KeybindComponent) comp;
             }
         }
-        return false;
+        return null;
     }
 
     @Override

@@ -218,7 +218,7 @@ public class LongJump extends Module {
 
     @EventTarget
     public void onKey(KeyEvent event) {
-        if (event.getKey() == mc.gameSettings.keyBindUseItem.getKeyCode()) {
+        if (mc.thePlayer != null && event.getKey() == mc.gameSettings.keyBindUseItem.getKeyCode()) {
             ItemStack stack = mc.thePlayer.inventory.getCurrentItem();
             if (stack != null && stack.getItem() instanceof ItemFireball) {
                 this.fireballTimer.reset();

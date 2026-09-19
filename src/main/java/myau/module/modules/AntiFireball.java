@@ -143,7 +143,7 @@ public class AntiFireball extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         this.farList.clear();
         this.nearList.clear();

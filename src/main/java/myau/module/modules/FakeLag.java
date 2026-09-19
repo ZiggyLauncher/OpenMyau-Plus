@@ -62,7 +62,7 @@ public class FakeLag extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onUpdate(UpdateEvent event) {
         if (event.getType() == EventType.PRE) {
             if (mc.thePlayer == null) return;

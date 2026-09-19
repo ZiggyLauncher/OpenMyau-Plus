@@ -34,6 +34,14 @@ public class Wtap extends Module {
         super("WTap", false);
     }
 
+    @Override
+    public void onDisabled() {
+        this.active = false;
+        this.stopForward = false;
+        this.delayTicks = 0L;
+        this.durationTicks = 0L;
+    }
+
     @EventTarget(Priority.LOWEST)
     public void onMoveInput(MoveInputEvent event) {
         if (this.active) {

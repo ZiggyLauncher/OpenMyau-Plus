@@ -112,6 +112,15 @@ public class ModuleManager {
                 this.sound = false;
                 SoundUtil.playSound("random.click");
             }
+            // Safety net against crashes and killed processes: a quiet snapshot every 30 s.
+            long now = System.currentTimeMillis();
+            if (now - this.lastAutoSave >= AUTO_SAVE_INTERVAL_MS) {
+                this.lastAutoSave = now;
+                myau.config.Config.autoSave();
+            }
         }
     }
+
+    private static final long AUTO_SAVE_INTERVAL_MS = 30_000L;
+    private long lastAutoSave = System.currentTimeMillis();
 }

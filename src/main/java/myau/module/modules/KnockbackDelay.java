@@ -87,7 +87,7 @@ public class KnockbackDelay extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         reset();
     }

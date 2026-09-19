@@ -43,8 +43,9 @@ public class ModuleComponent implements Component {
         this.isOpened = false;
         int y = yPos + 12;
 
-        if (!Myau.propertyManager.properties.get(mod).isEmpty()) {
-            for (Property<?> baseProperty : Myau.propertyManager.properties.get(mod)) {
+        java.util.List<Property<?>> properties = Myau.propertyManager.properties.get(mod);
+        if (properties != null && !properties.isEmpty()) {
+            for (Property<?> baseProperty : properties) {
                 if (baseProperty instanceof BooleanProperty) {
                     BooleanProperty property = (BooleanProperty) baseProperty;
                     CheckBoxComponent c = new CheckBoxComponent(property, this, y);

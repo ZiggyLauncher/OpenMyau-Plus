@@ -69,7 +69,7 @@ public class ChestAura extends Module {
         isRotating = false;
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onWorldLoad(LoadWorldEvent event) {
         openedChests.clear();
         scaffoldWasEnabled = false;

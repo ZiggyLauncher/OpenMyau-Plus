@@ -10,6 +10,7 @@ import myau.ui.impl.clickgui.normal.ClickGuiScreen;
 import myau.ui.impl.clickgui.modern.ModernClickGui;
 import myau.ui.impl.clickgui.raven.RavenClickGui;
 import myau.ui.impl.clickgui.cheadle.CheadleClickGui;
+import myau.util.KeyBindUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
 import org.lwjgl.input.Keyboard;
@@ -17,7 +18,14 @@ import org.lwjgl.input.Keyboard;
 import java.awt.*;
 
 public class ClickGUIModule extends Module {
+    /**
+     * The key/mouse press that opens the GUI is delivered again to the freshly opened screen in
+     * the same tick (Minecraft.runTick dispatches to currentScreen right after our KeyEvent), so
+     * presses within this window after opening are ignored instead of closing the GUI again.
+     */
+    private static final long OPEN_GRACE_MS = 250L;
     private boolean switchingGuiStyle;
+    private long openedAt;
 
     // ── Color palette (same as TargetESP) ────────────────────────────────────
     public static final int[] COLORS = {
@@ -74,6 +82,30 @@ public class ClickGUIModule extends Module {
         return switchingGuiStyle;
     }
 
+    private boolean withinOpenGrace() {
+        return System.currentTimeMillis() - this.openedAt < OPEN_GRACE_MS;
+    }
+
+    /**
+     * For a GUI skin's keyTyped: ESC always closes, the bound key closes once the opening press
+     * has passed. Skins should give an active bind component priority over this.
+     */
+    public boolean isCloseKey(int keyCode) {
+        if (keyCode == Keyboard.KEY_ESCAPE) {
+            return true;
+        }
+        return keyCode != KeyBindUtil.NONE && keyCode == this.getKey() && !withinOpenGrace();
+    }
+
+    /**
+     * For a GUI skin's mouseClicked: closes when the GUI is bound to this (non-left) mouse button.
+     */
+    public boolean isCloseMouseButton(int button) {
+        return KeyBindUtil.isBindableMouseButton(button)
+                && KeyBindUtil.mouseButtonToKey(button) == this.getKey()
+                && !withinOpenGrace();
+    }
+
     public GuiScreen getSelectedGui() {
         if (style.getValue() == 1) {
             return ClickGui.getInstance();
@@ -115,6 +147,7 @@ public class ClickGUIModule extends Module {
             this.setEnabled(false);
             return;
         }
+        this.openedAt = System.currentTimeMillis();
         openSelectedGui();
     }
 

@@ -136,7 +136,7 @@ public class ClickAssits extends Module {
         }
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onTick(TickEvent event) {
         if (event.getType() == EventType.PRE) {
             this.fixLeftButton();
@@ -144,7 +144,7 @@ public class ClickAssits extends Module {
         }
     }
 
-    @EventTarget(Priority.HIGH)
+    @EventTarget(value = Priority.HIGH, runWhenDisabled = true)
     public void onLeftClick(LeftClickMouseEvent event) {
         if (this.disableInCreative.getValue() && mc.playerController.getCurrentGameType() == GameType.CREATIVE) {
             return;
@@ -156,13 +156,13 @@ public class ClickAssits extends Module {
             return;
         }
 
+        if (!this.isEnabled() || event.isCancelled()) {
+            return;
+        }
+
         // Track for CPS if needed
         if (this.aboveCPSLeft.getValue()) {
             this.leftClicks.add(System.currentTimeMillis());
-        }
-
-        if (!this.isEnabled() || event.isCancelled()) {
-            return;
         }
 
         // If this is the extra click we injected, ignore it
@@ -176,10 +176,11 @@ public class ClickAssits extends Module {
             this.bot.mouseRelease(16);
             this.bot.mousePress(16);
             this.ignoreNextLeft = true;
+            Keystrokes.notifyInjectedClick(true);
         }
     }
 
-    @EventTarget(Priority.HIGH)
+    @EventTarget(value = Priority.HIGH, runWhenDisabled = true)
     public void onRightClick(RightClickMouseEvent event) {
         if (this.disableInCreative.getValue() && mc.playerController.getCurrentGameType() == GameType.CREATIVE) {
             return;
@@ -191,13 +192,13 @@ public class ClickAssits extends Module {
             return;
         }
 
+        if (!this.isEnabled() || event.isCancelled()) {
+            return;
+        }
+
         // Track for CPS if needed
         if (this.aboveCPSRight.getValue()) {
             this.rightClicks.add(System.currentTimeMillis());
-        }
-
-        if (!this.isEnabled() || event.isCancelled()) {
-            return;
         }
 
         // If this is the extra click we injected, ignore it
@@ -211,6 +212,7 @@ public class ClickAssits extends Module {
             this.bot.mouseRelease(4);
             this.bot.mousePress(4);
             this.ignoreNextRight = true;
+            Keystrokes.notifyInjectedClick(false);
         }
     }
 

@@ -439,7 +439,7 @@ public class Velocity extends Module {
         this.dig = false;
     }
 
-    @EventTarget
+    @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         this.onDisabled();
     }

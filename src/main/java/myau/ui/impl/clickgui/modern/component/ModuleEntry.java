@@ -39,7 +39,7 @@ public class ModuleEntry extends Component {
         propertiesComponents.add(keybindComp);
 
         if (Myau.propertyManager != null) {
-            List<Property<?>> properties = Myau.propertyManager.properties.get(module.getClass());
+            List<Property<?>> properties = Myau.propertyManager.properties.get(module);
             if (properties != null) {
                 for (Property<?> property : properties) {
                     Component comp = null;
@@ -200,13 +200,17 @@ public class ModuleEntry extends Component {
     }
 
     public boolean isBinding() {
+        return bindingComponent() != null;
+    }
+
+    public KeybindComponent bindingComponent() {
         if (expanded) {
             for (Component comp : propertiesComponents) {
                 if (!isComponentVisible(comp)) continue;
-                if (comp instanceof KeybindComponent && ((KeybindComponent) comp).isBinding()) return true;
+                if (comp instanceof KeybindComponent && ((KeybindComponent) comp).isBinding()) return (KeybindComponent) comp;
             }
         }
-        return false;
+        return null;
     }
 
     @Override

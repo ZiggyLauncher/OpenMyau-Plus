@@ -42,6 +42,7 @@ public class Myau {
     public static ModuleManager moduleManager;
     public static NotificationManager notificationManager;
     public static CommandManager commandManager;
+    public static HitManager hitManager;
     private static boolean anticheatRegistered;
     public static FontManagers fontManagers;
 
@@ -62,6 +63,7 @@ public class Myau {
         moduleManager = new ModuleManager();
         notificationManager = new NotificationManager();
         commandManager = new CommandManager();
+        hitManager = new HitManager();
         fontManagers = new FontManagers();
         fontManagers.load();
         EventManager.register(rotationManager);
@@ -71,6 +73,7 @@ public class Myau {
         EventManager.register(lagManager);
         EventManager.register(moduleManager);
         EventManager.register(commandManager);
+        EventManager.register(hitManager);
         registerClientAnticheat();
         moduleManager.modules.put(AimAssist.class, new AimAssist());
         moduleManager.modules.put(AntiAFK.class, new AntiAFK());
@@ -92,6 +95,7 @@ public class Myau {
         moduleManager.modules.put(Blink.class, new Blink());
         moduleManager.modules.put(BackTrack.class, new BackTrack());
         moduleManager.modules.put(Hitflick.class, new Hitflick());
+        moduleManager.modules.put(VoidFlick.class, new VoidFlick());
         moduleManager.modules.put(AutoHeadHitter.class, new AutoHeadHitter());
         moduleManager.modules.put(FPScounter.class, new FPScounter());
         moduleManager.modules.put(Chams.class, new Chams());
@@ -112,6 +116,13 @@ public class Myau {
         moduleManager.modules.put(HUD.class, new HUD());
         moduleManager.modules.put(Notifications.class, new Notifications());
         moduleManager.modules.put(Hotbar.class, new Hotbar());
+        moduleManager.modules.put(HotbarText.class, new HotbarText());
+        moduleManager.modules.put(ArmorHUD.class, new ArmorHUD());
+        moduleManager.modules.put(PotionHUD.class, new PotionHUD());
+        moduleManager.modules.put(Keystrokes.class, new Keystrokes());
+        moduleManager.modules.put(CylinderESP.class, new CylinderESP());
+        moduleManager.modules.put(HudEditor.class, new HudEditor());
+        moduleManager.modules.put(Updater.class, new Updater());
         moduleManager.modules.put(MoreKB.class, new MoreKB());
         moduleManager.modules.put(Indicators.class, new Indicators());
         moduleManager.modules.put(InventoryClicker.class, new InventoryClicker());
@@ -182,6 +193,7 @@ public class Myau {
         moduleManager.modules.put(TimerRange.class, new TimerRange());
         moduleManager.modules.put(Trajectories.class, new Trajectories());
         moduleManager.modules.put(Velocity.class, new Velocity());
+        moduleManager.modules.put(VelocityPreserver.class, new VelocityPreserver());
         moduleManager.modules.put(ViewClip.class, new ViewClip());
         moduleManager.modules.put(Wtap.class, new Wtap());
         moduleManager.modules.put(Xray.class, new Xray());
@@ -195,6 +207,8 @@ public class Myau {
         commandManager.commands.add(new DenickCommand());
         commandManager.commands.add(new FriendCommand());
         commandManager.commands.add(new HelpCommand());
+        commandManager.commands.add(new HudCommand());
+        commandManager.commands.add(new UpdateCommand());
         commandManager.commands.add(new HideCommand());
         commandManager.commands.add(new IgnCommand());
         commandManager.commands.add(new ItemCommand());
@@ -223,10 +237,13 @@ public class Myau {
             propertyManager.properties.put(module, properties);
             EventManager.register(module);
         }
-        Config config = new Config("default", true);
+        // default.json is the autosave of the last session's state; the config the user is
+        // actually "in" (for a bare `.config save`) is remembered separately.
+        Config config = new Config(Config.DEFAULT_NAME, true);
         if (config.file.exists()) {
-            config.load();
+            config.load(false);
         }
+        Config.restoreCurrent();
         if (friendManager.file.exists()) {
             friendManager.load();
         }
@@ -236,7 +253,14 @@ public class Myau {
         FontManager.initializeFonts();
         ClickGuiScreen.getInstance();
 
-        Runtime.getRuntime().addShutdownHook(new Thread(config::save));
+        // Fallback only: the real saves happen when quitting is requested, on world changes and
+        // periodically (see Config.autoSave). By the time this hook runs the world is unloaded and
+        // modules have reset themselves, so it must not overwrite a good save with that state.
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (!savedOnShutdown) {
+                Config.autoSave();
+            }
+        }));
 
         me.ksyz.accountmanager.AccountManager.init();
         ViaMCP.create();
@@ -249,6 +273,22 @@ public class Myau {
         }
         updateDisplayTitle();
 
+    }
+
+    private static volatile boolean savedOnShutdown;
+
+    /** Minecraft.shutdown(): quit requested, world and module state still intact - save now. */
+    public static void onShutdownRequested() {
+        if (moduleManager == null) {
+            return;
+        }
+        Config.autoSave();
+        savedOnShutdown = true;
+        // Last: hand any downloaded update to a detached process that swaps the jar once we exit.
+        Module updater = moduleManager.getModule(Updater.class);
+        if (updater instanceof Updater && updater.isEnabled()) {
+            ((Updater) updater).applyOnExit();
+        }
     }
 
     public static String getDisplayTitle() {
