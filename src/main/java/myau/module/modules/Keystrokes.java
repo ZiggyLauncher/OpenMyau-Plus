@@ -173,6 +173,12 @@ public class Keystrokes extends Module implements DraggableHud {
         return this.isEnabled();
     }
 
+    /** "{@code n} CPS" when it fits inside {@code width}, otherwise just the number. */
+    private static String fit(int count, float width) {
+        String full = count + " CPS";
+        return HudStyle.stringWidth(full) <= width - 2.0F ? full : String.valueOf(count);
+    }
+
     private static int cps(Deque<Long> clicks, long now) {
         while (!clicks.isEmpty() && now - clicks.peekFirst() > 1000L) {
             clicks.pollFirst();
@@ -260,8 +266,9 @@ public class Keystrokes extends Module implements DraggableHud {
 
         if (this.showMouse.getValue()) {
             float half = (rowWidth - gap) / 2.0F;
-            String left = this.showCps.getValue() ? cps(this.leftClicks, now) + " CPS" : "LMB";
-            String right = this.showCps.getValue() ? cps(this.rightClicks, now) + " CPS" : "RMB";
+            // "12 CPS" does not fit a narrow key; drop the unit rather than let it spill over.
+            String left = this.showCps.getValue() ? fit(cps(this.leftClicks, now), half) : "LMB";
+            String right = this.showCps.getValue() ? fit(cps(this.rightClicks, now), half) : "RMB";
             this.key(this.showCps.getValue() ? "LMB" : null, KEY_LMB, 0.0F, cursorY, half, keySize, left);
             this.key(this.showCps.getValue() ? "RMB" : null, KEY_RMB, half + gap, cursorY, half, keySize, right);
             cursorY += keySize + gap;

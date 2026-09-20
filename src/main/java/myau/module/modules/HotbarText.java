@@ -122,6 +122,21 @@ public class HotbarText extends Module implements DraggableHud {
     }
 
     /** The chat colour vanilla uses for the item's rarity, as RGB. */
+    /**
+     * Ramp in and ramp out as one expression, so a fade longer than the hold cross-fades instead
+     * of snapping from fully opaque straight into the tail of the fade-out.
+     *
+     * @param elapsed milliseconds since the text was shown
+     * @param hold    milliseconds at full opacity before fading out
+     * @param fade    milliseconds each ramp takes; never zero, the property floor is 50
+     * @return 0-1
+     */
+    static float opacity(long elapsed, int hold, int fade) {
+        float in = elapsed / (float) fade;
+        float out = (hold + fade - elapsed) / (float) fade;
+        return Math.max(0.0F, Math.min(1.0F, Math.min(in, out)));
+    }
+
     private static int rarityColor(ItemStack stack) {
         switch (stack.getRarity()) {
             case UNCOMMON:
@@ -173,10 +188,7 @@ public class HotbarText extends Module implements DraggableHud {
         if (elapsed > hold + fade) {
             return;
         }
-        float opacity = elapsed <= fade
-                ? elapsed / (float) fade                       // fade in
-                : elapsed >= hold ? 1.0F - (elapsed - hold) / (float) fade : 1.0F;
-        opacity = Math.max(0.0F, Math.min(1.0F, opacity));
+        float opacity = opacity(elapsed, hold, fade);
         if (opacity <= 0.01F) {
             return;
         }
@@ -209,7 +221,6 @@ public class HotbarText extends Module implements DraggableHud {
         }
         HudStyle.drawCentered(this.text, 0.0F, 0.0F, argb, this.shadow.getValue());
 
-        GlStateManager.disableBlend();
         GlStateManager.popMatrix();
         RenderUtil.resetColor();
     }

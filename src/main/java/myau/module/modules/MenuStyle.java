@@ -25,6 +25,10 @@ public class MenuStyle extends Module {
     private static final int SLOT_FLAT = 1;
     private static final int SLOT_ROUNDED = 2;
 
+    public static final int HIGHLIGHT_ACCENT = 0;
+    public static final int HIGHLIGHT_WHITE = 1;
+    public static final int HIGHLIGHT_VANILLA = 2;
+
     public final BooleanProperty containers = new BooleanProperty("Containers", true);
     public final BooleanProperty buttons = new BooleanProperty("Buttons", true);
     public final ModeProperty colorMode = new ModeProperty("Color-Mode", HudStyle.MODE_HUD, HudStyle.COLOR_MODES);
@@ -33,10 +37,19 @@ public class MenuStyle extends Module {
     public final FloatProperty panelRadius = new FloatProperty("Panel-Radius", 8.0F, 0.0F, 16.0F, containers::getValue);
     public final ModeProperty slotStyle = new ModeProperty("Slot-Style", SLOT_ROUNDED,
             new String[]{"None", "Flat", "Rounded"}, containers::getValue);
-    public final FloatProperty slotRadius = new FloatProperty("Slot-Radius", 3.0F, 0.0F, 8.0F,
+    public final FloatProperty slotRadius = new FloatProperty("Slot-Radius", 4.0F, 0.0F, 8.0F,
             () -> this.containers.getValue() && this.slotStyle.getValue() == SLOT_ROUNDED);
-    public final IntProperty slotAlpha = new IntProperty("Slot-Alpha", 70, 0, 255,
+    /** Inset inside each 18px slot cell. Zero makes neighbours touch and read as one slab. */
+    public final FloatProperty slotGap = new FloatProperty("Slot-Gap", 1.0F, 0.0F, 3.0F,
             () -> this.containers.getValue() && this.slotStyle.getValue() != SLOT_NONE);
+    public final IntProperty slotAlpha = new IntProperty("Slot-Alpha", 26, 0, 255,
+            () -> this.containers.getValue() && this.slotStyle.getValue() != SLOT_NONE);
+    public final BooleanProperty slotBorder = new BooleanProperty("Slot-Border", true,
+            () -> this.containers.getValue() && this.slotStyle.getValue() != SLOT_NONE);
+    public final ModeProperty highlight = new ModeProperty("Highlight", HIGHLIGHT_ACCENT,
+            new String[]{"Accent", "White", "Vanilla"}, containers::getValue);
+    public final IntProperty highlightAlpha = new IntProperty("Highlight-Alpha", 95, 10, 255,
+            () -> this.containers.getValue() && this.highlight.getValue() != HIGHLIGHT_VANILLA);
     public final BooleanProperty accentBorder = new BooleanProperty("Accent-Border", true, containers::getValue);
     public final FloatProperty buttonRadius = new FloatProperty("Button-Radius", 5.0F, 0.0F, 12.0F, buttons::getValue);
     public final IntProperty buttonAlpha = new IntProperty("Button-Alpha", 170, 40, 255, buttons::getValue);

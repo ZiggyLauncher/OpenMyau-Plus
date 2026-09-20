@@ -123,6 +123,7 @@ public class Myau {
         moduleManager.modules.put(CylinderESP.class, new CylinderESP());
         moduleManager.modules.put(HudEditor.class, new HudEditor());
         moduleManager.modules.put(MenuStyle.class, new MenuStyle());
+        moduleManager.modules.put(CustomMenu.class, new CustomMenu());
         moduleManager.modules.put(Updater.class, new Updater());
         moduleManager.modules.put(MoreKB.class, new MoreKB());
         moduleManager.modules.put(Indicators.class, new Indicators());

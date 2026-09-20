@@ -93,7 +93,9 @@ public abstract class MixinMinecraft {
     }
 
     private boolean isVanillaMainMenu(GuiScreen guiScreen) {
-        return guiScreen != null && "net.minecraft.client.gui.GuiMainMenu".equals(guiScreen.getClass().getName());
+        return guiScreen != null
+                && myau.module.modules.CustomMenu.shouldReplaceMainMenu()
+                && "net.minecraft.client.gui.GuiMainMenu".equals(guiScreen.getClass().getName());
     }
 
     private void displayMyauMainMenu() {

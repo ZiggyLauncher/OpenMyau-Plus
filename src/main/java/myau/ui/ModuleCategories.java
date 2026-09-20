@@ -48,7 +48,7 @@ public final class ModuleCategories {
             "NoSlow", "KeepSprint", "Eagle", "NoJumpDelay", "AntiVoid", "Timer", "VelocityPreserver");
     private static final Set<String> RENDER = set(
             "ESP", "Chams", "FullBright", "Tracers", "NameTags", "Xray", "TargetESP", "TargetHUD", "Indicators",
-            "BedESP", "ItemESP", "BreakProgress", "ViewClip", "NoHurtCam", "HUD", "Hotbar", "HotbarText", "ArmorHUD", "PotionHUD", "Keystrokes", "CylinderESP", "HudEditor", "MenuStyle", "Notifications",
+            "BedESP", "ItemESP", "BreakProgress", "ViewClip", "NoHurtCam", "HUD", "Hotbar", "HotbarText", "ArmorHUD", "PotionHUD", "Keystrokes", "CylinderESP", "HudEditor", "MenuStyle", "CustomMenu", "Notifications",
             "ClickGUI", "ChestESP", "Trajectories", "Radar", "RenderFixes", "FPScounter", "WaterMark", "WaterMark2",
             "HitParticleEffects", "DynamicIsland", "ESP2D", "TeamHealthDisplay", "Statistics", "Animations",
             "BlockOverlay", "Ambience", "Capes", "FreeLook", "ItemPhysics");

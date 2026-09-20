@@ -18,9 +18,11 @@ import net.minecraft.entity.player.EntityPlayer;
 import org.lwjgl.opengl.GL11;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -70,7 +72,11 @@ public class CylinderESP extends Module {
     private int circleSegments = -1;
     /** Per-player appear/disappear progress, keyed by entity id. */
     private final Map<Integer, Float> presence = new HashMap<>();
+    /** Players that dropped out of range and are still fading, keyed the same way. */
+    private final Map<Integer, EntityPlayer> fading = new HashMap<>();
     private long lastFrameNanos;
+    /** Accumulated spin, so the top ring never jumps when the wall clock wraps. */
+    private float spinDegrees;
 
     public CylinderESP() {
         super("CylinderESP", false, false, "Smooth round ESP cylinder around players");
@@ -79,17 +85,21 @@ public class CylinderESP extends Module {
     @Override
     public void onEnabled() {
         this.presence.clear();
+        this.fading.clear();
         this.lastFrameNanos = 0L;
+        this.spinDegrees = 0.0F;
     }
 
     @Override
     public void onDisabled() {
         this.presence.clear();
+        this.fading.clear();
     }
 
     @EventTarget(runWhenDisabled = true)
     public void onLoadWorld(LoadWorldEvent event) {
         this.presence.clear();
+        this.fading.clear();
     }
 
     private float[] circle(int segments) {
@@ -141,7 +151,11 @@ public class CylinderESP extends Module {
     }
 
     /**
-     * Advances each player's appear/disappear progress and drops the ones that have faded out.
+     * Advances each player's appear/disappear progress, and appends the ones that are still
+     * fading out to {@code visible} so the disappear animation is drawn rather than only counted.
+     * <p>
+     * A player who left the world is dropped at once - only someone who walked out of range,
+     * behind you or behind a wall gets the fade.
      *
      * @return seconds since the previous frame
      */
@@ -151,34 +165,50 @@ public class CylinderESP extends Module {
                 : Math.min(0.1F, Math.max(0.0F, (now - this.lastFrameNanos) / 1.0e9F));
         this.lastFrameNanos = now;
 
+        Set<Integer> present = new HashSet<>();
         for (EntityPlayer player : visible) {
             int id = player.getEntityId();
+            present.add(id);
+            this.fading.remove(id);
             float current = this.presence.getOrDefault(id, this.appearAnimation.getValue() ? 0.0F : 1.0F);
             this.presence.put(id, HudStyle.approach(current, 1.0F, animationSpeed, delta));
         }
-        if (this.presence.size() > visible.size()) {
-            Iterator<Map.Entry<Integer, Float>> iterator = this.presence.entrySet().iterator();
-            while (iterator.hasNext()) {
-                Map.Entry<Integer, Float> entry = iterator.next();
-                boolean stillVisible = false;
-                for (EntityPlayer player : visible) {
-                    if (player.getEntityId() == entry.getKey()) {
-                        stillVisible = true;
-                        break;
-                    }
-                }
-                if (stillVisible) {
-                    continue;
-                }
-                float faded = HudStyle.approach(entry.getValue(), 0.0F, animationSpeed, delta);
-                if (faded <= 0.02F) {
-                    iterator.remove();
-                } else {
-                    entry.setValue(faded);
-                }
+
+        if (this.presence.size() == present.size()) {
+            return delta;
+        }
+        Iterator<Map.Entry<Integer, Float>> iterator = this.presence.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<Integer, Float> entry = iterator.next();
+            int id = entry.getKey();
+            if (present.contains(id)) {
+                continue;
+            }
+            EntityPlayer leaving = this.fading.get(id);
+            if (leaving == null) {
+                leaving = this.lookup(id);
+            }
+            float faded = HudStyle.approach(entry.getValue(), 0.0F, animationSpeed, delta);
+            if (leaving == null || faded <= 0.02F) {
+                iterator.remove();
+                this.fading.remove(id);
+            } else {
+                entry.setValue(faded);
+                this.fading.put(id, leaving);
+                visible.add(leaving);
             }
         }
         return delta;
+    }
+
+    /** The still-loaded player with this entity id, or null once they have left the world. */
+    private EntityPlayer lookup(int id) {
+        for (EntityPlayer player : mc.theWorld.playerEntities) {
+            if (player.getEntityId() == id && !player.isDead) {
+                return player;
+            }
+        }
+        return null;
     }
 
     @EventTarget
@@ -188,9 +218,9 @@ public class CylinderESP extends Module {
         }
         List<EntityPlayer> targets = mc.theWorld.playerEntities.stream()
                 .filter(this::shouldRender)
-                .collect(Collectors.toList());
-        this.updatePresence(targets, this.appearAnimation.getValue() ? 9.0F : 1000.0F);
-        if (targets.isEmpty() && this.presence.isEmpty()) {
+                .collect(Collectors.toCollection(java.util.ArrayList::new));
+        float delta = this.updatePresence(targets, this.appearAnimation.getValue() ? 9.0F : 1000.0F);
+        if (targets.isEmpty()) {
             return;
         }
 
@@ -206,8 +236,10 @@ public class CylinderESP extends Module {
         boolean drawFill = style == STYLE_FILLED || style == STYLE_BOTH;
         boolean drawOutline = style == STYLE_OUTLINE || style == STYLE_BOTH;
         long now = System.currentTimeMillis();
-        float spin = this.spinSpeed.getValue() == 0.0F ? 0.0F
-                : (now % 360000L) / 1000.0F * this.spinSpeed.getValue() % 360.0F;
+        // Accumulated rather than derived from the clock: deriving it makes the ring jump
+        // whenever the wrapped timestamp rolls over at anything but a whole turn.
+        this.spinDegrees = (this.spinDegrees + this.spinSpeed.getValue() * delta) % 360.0F;
+        float spin = this.spinDegrees;
 
         RenderUtil.enableRenderState();
         if (!this.throughWalls.getValue()) {

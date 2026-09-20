@@ -25,6 +25,8 @@ public class ArmorHUD extends Module implements DraggableHud {
     private static final Minecraft mc = Minecraft.getMinecraft();
     private static final int SLOT = 20;
     private static final float PADDING = 3.0F;
+    /** Room reserved above a slot for its durability number, so the text stays inside the panel. */
+    private static final float TEXT_BAND = 10.0F;
 
     private static final int LAYOUT_HORIZONTAL = 0;
 
@@ -75,12 +77,18 @@ public class ArmorHUD extends Module implements DraggableHud {
         return count;
     }
 
+    /** Height of one item row: the slot, plus its own number band in the vertical layout. */
+    private float band() {
+        return this.durabilityText.getValue() ? TEXT_BAND : 0.0F;
+    }
+
     /** Unscaled panel size for the given item count. */
     private float[] panelSize(int count) {
         boolean horizontal = this.layout.getValue() == LAYOUT_HORIZONTAL;
+        float band = this.band();
         return new float[]{
                 horizontal ? count * SLOT + PADDING * 2.0F : SLOT + PADDING * 2.0F,
-                horizontal ? SLOT + PADDING * 2.0F : count * SLOT + PADDING * 2.0F
+                horizontal ? SLOT + band + PADDING * 2.0F : count * (SLOT + band) + PADDING * 2.0F
         };
     }
 
@@ -179,8 +187,8 @@ public class ArmorHUD extends Module implements DraggableHud {
             if (stack == null) {
                 continue;
             }
-            int x = (int) (PADDING + (horizontal ? i * SLOT : 0) + 2.0F);
-            int y = (int) (PADDING + (horizontal ? 0 : i * SLOT) + 2.0F);
+            int x = (int) (this.slotX(i, horizontal) + 2.0F);
+            int y = (int) (this.slotY(i, horizontal) + 2.0F);
             RenderUtil.renderItemAndEffectIntoGui3D(stack, x, y);
             if (this.stackCount.getValue()) {
                 mc.getRenderItem().renderItemOverlays(mc.fontRendererObj, stack, x, y);
@@ -194,8 +202,8 @@ public class ArmorHUD extends Module implements DraggableHud {
             if (stack == null || !stack.isItemStackDamageable()) {
                 continue;
             }
-            float x = PADDING + (horizontal ? i * SLOT : 0);
-            float y = PADDING + (horizontal ? 0 : i * SLOT);
+            float x = this.slotX(i, horizontal);
+            float y = this.slotY(i, horizontal);
             float remaining = 1.0F - (float) stack.getItemDamage() / Math.max(1.0F, stack.getMaxDamage());
             remaining = Math.max(0.0F, Math.min(1.0F, remaining));
 
@@ -211,14 +219,25 @@ public class ArmorHUD extends Module implements DraggableHud {
             }
             if (this.durabilityText.getValue()) {
                 String text = String.valueOf(stack.getMaxDamage() - stack.getItemDamage());
-                HudStyle.drawCentered(text, x + SLOT / 2.0F, y - HudStyle.fontHeight() + 1.0F,
+                // Centred in the band reserved above the slot rather than floating off the panel.
+                HudStyle.drawCentered(text, x + SLOT / 2.0F,
+                        y - (TEXT_BAND + HudStyle.fontHeight()) / 2.0F,
                         durabilityColor(remaining, this.alpha.getValue()), true);
             }
         }
 
-        GlStateManager.disableBlend();
         GlStateManager.popMatrix();
         RenderUtil.resetColor();
+    }
+
+    /** Top-left of item {@code i} inside the panel, in unscaled panel space. */
+    private float slotX(int i, boolean horizontal) {
+        return PADDING + (horizontal ? i * SLOT : 0.0F);
+    }
+
+    private float slotY(int i, boolean horizontal) {
+        float band = this.band();
+        return PADDING + band + (horizontal ? 0.0F : i * (SLOT + band));
     }
 
     /** Green when fresh, through yellow, to red when nearly broken. */
