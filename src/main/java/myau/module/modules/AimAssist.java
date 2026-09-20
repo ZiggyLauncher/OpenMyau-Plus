@@ -3,6 +3,7 @@ package myau.module.modules;
 import myau.Myau;
 import myau.event.EventTarget;
 import myau.event.types.EventType;
+import myau.events.MoveInputEvent;
 import myau.events.Render3DEvent;
 import myau.events.UpdateEvent;
 import myau.module.Module;
@@ -14,6 +15,7 @@ import myau.rotation.Rotation;
 import myau.rotation.RotationConfig;
 import myau.rotation.Rotator;
 import myau.util.ItemUtil;
+import myau.util.MoveUtil;
 import myau.util.RotationUtil;
 import myau.util.TeamUtil;
 import net.minecraft.client.Minecraft;
@@ -66,6 +68,14 @@ public class AimAssist extends Module {
     public final BooleanProperty onHold = new BooleanProperty("onHold", false);
     public final BooleanProperty weaponsOnly = new BooleanProperty("weaponsOnly", false);
     public final ModeProperty priority = new ModeProperty("target", PRIORITY_CLOSEST, new String[]{"Closest to FOV", "Lowest health"});
+    /**
+     * Rotates your movement input to match the rotation being reported, the way the original's
+     * MoveFix does. Silent mode is unusable without it: the server simulates your movement from
+     * the rotation you send, so sending one rotation while walking along another is a movement
+     * mismatch on every tick, which is what a prediction anticheat flags and lags you back for.
+     */
+    public final BooleanProperty moveFix = new BooleanProperty("move-fix", true,
+            () -> this.mode.getValue() == MODE_SILENT);
     public final BooleanProperty playersOnly = new BooleanProperty("players only", true);
     public final BooleanProperty teams = new BooleanProperty("teams", true);
     public final BooleanProperty botCheck = new BooleanProperty("bot-check", true);
@@ -332,6 +342,47 @@ public class AimAssist extends Module {
         this.silent = quantize(stepped, event.getYaw(), event.getPitch());
         reported = this.silent;
         event.setRotation(this.silent.yaw, this.silent.pitch, ROTATION_PRIORITY);
+        this.reportMovementYaw(event, this.silent.yaw);
+    }
+
+    /**
+     * Tells the client's MoveFix which yaw the server is going to simulate this tick, so it can
+     * rotate the movement input to match. Passing the real yaw instead is the same as asking for
+     * no correction, which is what the other modules here do when their move-fix is off.
+     */
+    private void reportMovementYaw(UpdateEvent event, float silentYaw) {
+        event.setPervRotation(this.moveFix.getValue() ? silentYaw : mc.thePlayer.rotationYaw,
+                ROTATION_PRIORITY);
+    }
+
+    /**
+     * Applies the strafe correction directly when the MoveFix module is not already doing it.
+     * <p>
+     * Silent mode is not safe to run uncorrected, and MoveFix is off by default, so leaving this
+     * to the user to discover means the first thing silent mode does is get them lagged back. The
+     * MoveFix module owns the correction whenever it is on - running both would rotate the input
+     * twice and send you somewhere neither rotation points.
+     */
+    @EventTarget
+    public void onMoveInput(MoveInputEvent event) {
+        if (this.mode.getValue() != MODE_SILENT || !this.moveFix.getValue()) {
+            return;
+        }
+        Rotation current = this.silent;
+        if (current == null || mc.thePlayer == null || moveFixModuleActive()) {
+            return;
+        }
+        if (MoveUtil.isForwardPressed()) {
+            MoveUtil.fixStrafe(current.yaw);
+        }
+    }
+
+    private static boolean moveFixModuleActive() {
+        if (Myau.moduleManager == null) {
+            return false;
+        }
+        Module module = Myau.moduleManager.modules.get(MoveFix.class);
+        return module != null && module.isEnabled();
     }
 
     /**
@@ -357,6 +408,7 @@ public class AimAssist extends Module {
         this.silent = next;
         reported = next;
         event.setRotation(next.yaw, next.pitch, ROTATION_PRIORITY);
+        this.reportMovementYaw(event, next.yaw);
     }
 
     @EventTarget

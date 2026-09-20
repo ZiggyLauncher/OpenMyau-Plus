@@ -521,7 +521,7 @@ public class AdinClickGui extends GuiScreen {
             }
             case SETTING_SLIDER: {
                 AdinControls.drawSlider(row.property, controlX, y, controlWidth, row.height,
-                        fractionOf(row.property), row.property.getValuePrompt(), this.valueColumn,
+                        fractionOf(row.property), valueText(row.property), this.valueColumn,
                         fadedAccent, font, this.dragging == row.property);
                 break;
             }
@@ -861,25 +861,60 @@ public class AdinClickGui extends GuiScreen {
 
     // ---------------------------------------------------------------- numeric properties
 
+    /**
+     * The setting's current value, formatted for display.
+     * <p>
+     * Deliberately not {@code getValuePrompt()}: that returns the accepted <i>range</i> ("1-20")
+     * for the chat command, so using it puts the bounds in the value column of every slider and
+     * there is no way to read what the setting is actually on.
+     */
+    private static String valueText(Property<?> property) {
+        if (property instanceof FloatProperty) {
+            return number(((FloatProperty) property).getValue());
+        }
+        if (property instanceof IntProperty) {
+            return String.valueOf(((IntProperty) property).getValue());
+        }
+        if (property instanceof PercentProperty) {
+            return ((PercentProperty) property).getValue() + "%";
+        }
+        if (property instanceof LongProperty) {
+            return String.valueOf(((LongProperty) property).getValue());
+        }
+        return String.valueOf(property.getValue());
+    }
+
+    /** Whole numbers lose their ".0"; the rest keep at most two decimals. */
+    private static String number(float value) {
+        if (value == Math.rint(value) && !Float.isInfinite(value)) {
+            return String.valueOf((int) value);
+        }
+        return String.valueOf(Math.round(value * 100.0F) / 100.0F);
+    }
+
     /** The widest value this slider can show, used to size the shared value column. */
     private static String boundsText(Property<?> property) {
         if (property instanceof FloatProperty) {
             FloatProperty typed = (FloatProperty) property;
-            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+            return widest(number(typed.getMinimum()), number(typed.getMaximum()));
         }
         if (property instanceof IntProperty) {
             IntProperty typed = (IntProperty) property;
-            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+            return widest(String.valueOf(typed.getMinimum()), String.valueOf(typed.getMaximum()));
         }
         if (property instanceof PercentProperty) {
             PercentProperty typed = (PercentProperty) property;
-            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+            return widest(typed.getMinimum() + "%", typed.getMaximum() + "%");
         }
         if (property instanceof LongProperty) {
             LongProperty typed = (LongProperty) property;
-            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+            return widest(String.valueOf(typed.getMinimum()), String.valueOf(typed.getMaximum()));
         }
         return "000";
+    }
+
+    private static String widest(String first, String second) {
+        return first.length() >= second.length() ? first : second;
     }
 
     private static float fractionOf(Property<?> property) {

@@ -11,6 +11,7 @@ import net.minecraft.network.play.server.S06PacketUpdateHealth;
 import net.minecraft.network.play.server.S07PacketRespawn;
 import net.minecraft.network.play.server.S08PacketPlayerPosLook;
 import net.minecraft.network.play.server.S29PacketSoundEffect;
+import net.minecraft.network.play.server.S32PacketConfirmTransaction;
 import net.minecraft.network.play.server.S40PacketDisconnect;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -97,6 +98,14 @@ public final class Backtracker {
     /** Packets that must never be delayed, whatever else is going on. */
     private static boolean immediate(Packet<?> packet) {
         if (packet instanceof S00PacketKeepAlive || packet instanceof S02PacketChat) {
+            return true;
+        }
+        // 1.8.9 anticheats measure latency and ordering with transactions, and answer them the
+        // moment they arrive. Holding one does not make the client look laggy, it makes it look
+        // like it is withholding - which is the signature those checks are built to catch, and
+        // what drives the transaction balance far negative. The original has no equivalent to
+        // skip because modern versions do not use this packet for timing.
+        if (packet instanceof S32PacketConfirmTransaction) {
             return true;
         }
         // Holding the hurt sound would delay the one cue telling you that you are being hit.
