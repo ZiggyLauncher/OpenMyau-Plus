@@ -10,6 +10,7 @@ import myau.ui.impl.clickgui.normal.ClickGuiScreen;
 import myau.ui.impl.clickgui.modern.ModernClickGui;
 import myau.ui.impl.clickgui.raven.RavenClickGui;
 import myau.ui.impl.clickgui.cheadle.CheadleClickGui;
+import myau.ui.impl.clickgui.adin.AdinClickGui;
 import myau.util.KeyBindUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
@@ -43,7 +44,7 @@ public class ClickGUIModule extends Module {
     };
 
     public ModeProperty accentColor = new ModeProperty("Color", 0, COLOR_NAMES);
-    public ModeProperty style = new ModeProperty("Style", 4, new String[]{"Normal", "Raven B3", "Raven B4", "Cheadle", "Modern", "Rise"});
+    public ModeProperty style = new ModeProperty("Style", 4, new String[]{"Normal", "Raven B3", "Raven B4", "Cheadle", "Modern", "Rise", "Adin"});
     public BooleanProperty saveGuiState = new BooleanProperty("Save GUI State", true);
     public BooleanProperty shadow = new BooleanProperty("Shadow", true);
     public BooleanProperty glass = new BooleanProperty("Glass", true);
@@ -70,6 +71,8 @@ public class ClickGUIModule extends Module {
                 || mc.currentScreen instanceof ClickGuiScreen
                 || mc.currentScreen instanceof RavenClickGui
                 || mc.currentScreen instanceof CheadleClickGui
+                || mc.currentScreen instanceof AdinClickGui
+                || mc.currentScreen instanceof myau.ui.impl.clickgui.rise.RiseClickGUI
                 || mc.currentScreen instanceof myau.ui.impl.clickgui.modern.ModernClickGui;
         try {
             mc.displayGuiScreen(screen);
@@ -125,6 +128,9 @@ public class ClickGUIModule extends Module {
         if (style.getValue() == 5) {
             return myau.ui.impl.clickgui.rise.RiseClickGUI.getInstance();
         }
+        if (style.getValue() == 6) {
+            return AdinClickGui.getInstance();
+        }
         return ClickGuiScreen.getInstance();
     }
 
@@ -134,7 +140,8 @@ public class ClickGUIModule extends Module {
             Minecraft mc = Minecraft.getMinecraft();
             if (mc.currentScreen instanceof ClickGui || mc.currentScreen instanceof ClickGuiScreen
                     || mc.currentScreen instanceof RavenClickGui || mc.currentScreen instanceof CheadleClickGui
-                    || mc.currentScreen instanceof ModernClickGui || mc.currentScreen instanceof myau.ui.impl.clickgui.rise.RiseClickGUI) {
+                    || mc.currentScreen instanceof ModernClickGui || mc.currentScreen instanceof AdinClickGui
+                    || mc.currentScreen instanceof myau.ui.impl.clickgui.rise.RiseClickGUI) {
                 openSelectedGui();
             }
         }
