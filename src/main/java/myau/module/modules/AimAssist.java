@@ -3,273 +3,387 @@ package myau.module.modules;
 import myau.Myau;
 import myau.event.EventTarget;
 import myau.event.types.EventType;
-import myau.events.KeyEvent;
-import myau.events.TickEvent;
+import myau.events.Render3DEvent;
+import myau.events.UpdateEvent;
 import myau.module.Module;
-import myau.util.*;
 import myau.property.properties.BooleanProperty;
 import myau.property.properties.FloatProperty;
-import myau.property.properties.IntProperty;
 import myau.property.properties.ModeProperty;
+import myau.rotation.Bone;
+import myau.rotation.Rotation;
+import myau.rotation.RotationConfig;
+import myau.rotation.Rotator;
+import myau.util.ItemUtil;
+import myau.util.RotationUtil;
+import myau.util.TeamUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
+import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.util.AxisAlignedBB;
-import net.minecraft.util.MovingObjectPosition.MovingObjectType;
+import net.minecraft.util.MathHelper;
 import net.minecraft.util.Vec3;
 
-import java.util.Comparator;
-import java.util.List;
-import java.util.stream.Collectors;
-
+/**
+ * Bone-based aim assist.
+ * <p>
+ * Every tick it picks the target whose nearest enabled bone sits closest to the centre of your
+ * view, then hands that bone to a rotator which walks the view toward it. Nothing snaps: the
+ * rotator only ever produces a step, and the aim point is re-evaluated every frame, so the turn
+ * tracks a moving target instead of chasing where it used to be.
+ * <p>
+ * Two rotators are available. <b>Ease-Out-Cubic</b> covers a share of the remaining angle each
+ * step and tapers in. <b>WindMouse</b> integrates a gravity pull toward the target against a
+ * random sideways wind, which drifts and settles the way a hand does; it also folds your own
+ * mouse movement back into its current segment, so moving the mouse steers the assist rather
+ * than fighting it.
+ * <p>
+ * In <b>Regular</b> mode the turn goes through {@link Entity#setAngles}, the exact path the
+ * vanilla mouse uses, so the view really moves. In <b>Silent</b> mode the view is untouched and
+ * only the rotation reported to the server changes, quantised onto the same sensitivity steps a
+ * real mouse can produce.
+ */
 public class AimAssist extends Module {
     private static final Minecraft mc = Minecraft.getMinecraft();
-    private final TimerUtil timer = new TimerUtil();
-    public final ModeProperty mode = new ModeProperty("mode", 0, new String[]{"Normal", "LockOn"});
-    // Normal 模式属性
-    public final FloatProperty hSpeed = new FloatProperty("horizontal-speed", 3.0F, 0.0F, 10.0F);
-    public final FloatProperty vSpeed = new FloatProperty("vertical-speed", 0.0F, 0.0F, 10.0F);
-    public final FloatProperty smoothing = new FloatProperty("smoothing", 50.0F, 0.0F, 100.0F);
-    // LockOn 模式属性
-    public final ModeProperty safeZone = new ModeProperty("safe-zone", 1, new String[]{"Head", "Torso", "Feet"}, () -> "LockOn".equals(this.mode.getModeString()));
-    public final BooleanProperty noiseEnabled = new BooleanProperty("noise", false, () -> "LockOn".equals(this.mode.getModeString()));
-    public final FloatProperty noiseMinYaw = new FloatProperty("noise-min-yaw", 0.0F, 0.0F, 5.0F, () -> "LockOn".equals(this.mode.getModeString()) && this.noiseEnabled.getValue());
-    public final FloatProperty noiseMaxYaw = new FloatProperty("noise-max-yaw", 1.0F, 0.0F, 5.0F, () -> "LockOn".equals(this.mode.getModeString()) && this.noiseEnabled.getValue());
-    public final FloatProperty noiseMinPitch = new FloatProperty("noise-min-pitch", 0.0F, 0.0F, 5.0F, () -> "LockOn".equals(this.mode.getModeString()) && this.noiseEnabled.getValue());
-    public final FloatProperty noiseMaxPitch = new FloatProperty("noise-max-pitch", 1.0F, 0.0F, 5.0F, () -> "LockOn".equals(this.mode.getModeString()) && this.noiseEnabled.getValue());
-    public final FloatProperty noiseSpeed = new FloatProperty("noise-speed", 1.0F, 0.1F, 10.0F, () -> "LockOn".equals(this.mode.getModeString()) && this.noiseEnabled.getValue());
-    // Noise 状态
-    private double noiseYaw = 0, noisePitch = 0;
-    private long lastNoiseTime = 0;
-    // 通用属性
-    public final FloatProperty range = new FloatProperty("range", 4.5F, 3.0F, 8.0F);
-    public final IntProperty fov = new IntProperty("fov", 90, 30, 360);
-    public final BooleanProperty weaponOnly = new BooleanProperty("weapons-only", true);
-    public final BooleanProperty allowTools = new BooleanProperty("allow-tools", false, this.weaponOnly::getValue);
-    public final BooleanProperty botChecks = new BooleanProperty("bot-check", true);
-    public final BooleanProperty team = new BooleanProperty("teams", true);
-    private boolean isValidTarget(EntityPlayer entityPlayer) {
-        if (entityPlayer != mc.thePlayer && entityPlayer != mc.thePlayer.ridingEntity) {
-            if (entityPlayer == mc.getRenderViewEntity() || entityPlayer == mc.getRenderViewEntity().ridingEntity) return false;
-            else if (entityPlayer.deathTime > 0) return false;
-            else if (RotationUtil.distanceToEntity(entityPlayer) > (double) this.range.getValue()) return false;
-            else if (RotationUtil.angleToEntity(entityPlayer) > (float) this.fov.getValue()) return false;
-            else if (RotationUtil.rayTrace(entityPlayer) != null) return false;
-            else if (TeamUtil.isFriend(entityPlayer)) return false;
-            else return (!this.team.getValue() || !TeamUtil.isSameTeam(entityPlayer)) && (!this.botChecks.getValue() || !TeamUtil.isBot(entityPlayer));
-        } else return false;
-    }
 
-    private boolean isInReach(EntityPlayer entityPlayer) {
-        Reach reach = (Reach) Myau.moduleManager.modules.get(Reach.class);
-        double distance = reach.isEnabled() ? (double) reach.range.getValue() : 3.0;
-        return RotationUtil.distanceToEntity(entityPlayer) <= distance;
-    }
+    private static final int MODE_REGULAR = 0;
+    private static final int MODE_SILENT = 1;
+    private static final int PRIORITY_CLOSEST = 0;
+    private static final int PRIORITY_HEALTH = 1;
 
-    private boolean isLookingAtBlock() {
-        return mc.objectMouseOver != null && mc.objectMouseOver.typeOfHit == MovingObjectType.BLOCK;
-    }
+    /** Vanilla converts mouse counts to degrees with this factor, and setAngles multiplies it in. */
+    private static final float TURN_FACTOR = 0.15F;
+    /** Rotation priority for the silent path. KillAura uses 1, so it always wins over this. */
+    private static final int ROTATION_PRIORITY = 0;
 
-    private EntityPlayer selectTarget() {
-        List<EntityPlayer> inRange = mc.theWorld.loadedEntityList.stream()
-                .filter(entity -> entity instanceof EntityPlayer).map(entity -> (EntityPlayer) entity)
-                .filter(this::isValidTarget)
-                .sorted(Comparator.comparingDouble(RotationUtil::distanceToEntity))
-                .collect(Collectors.toList());
-        if (inRange.isEmpty()) return null;
-        if (inRange.stream().anyMatch(this::isInReach)) inRange.removeIf(entityPlayer -> !this.isInReach(entityPlayer));
-        return inRange.get(0);
-    }
+    public final ModeProperty mode = new ModeProperty("mode", MODE_REGULAR, new String[]{"Regular", "Silent"});
+    public final ModeProperty rotation = new ModeProperty("rotation", RotationConfig.EASE_OUT_CUBIC, RotationConfig.SMOOTHING);
+    public final FloatProperty smoothness = new FloatProperty("smoothness", 50.0F, 0.0F, 100.0F);
+    public final FloatProperty fov = new FloatProperty("fov", 80.0F, 10.0F, 360.0F);
+    public final FloatProperty range = new FloatProperty("range", 6.0F, 1.0F, 8.0F);
+    public final ModeProperty priority = new ModeProperty("target", PRIORITY_CLOSEST, new String[]{"Closest to FOV", "Lowest health"});
+    public final BooleanProperty onHold = new BooleanProperty("on-hold", false);
+    public final BooleanProperty weaponsOnly = new BooleanProperty("weapons-only", false);
+
+    public final BooleanProperty boneMultipoint = new BooleanProperty("bone-multipoint", false);
+    public final BooleanProperty boneHead = new BooleanProperty("bone-head", true);
+    public final BooleanProperty boneBody = new BooleanProperty("bone-body", false);
+    public final BooleanProperty boneArms = new BooleanProperty("bone-arms", false);
+    public final BooleanProperty boneLegs = new BooleanProperty("bone-legs", false);
+
+    public final BooleanProperty players = new BooleanProperty("players", true);
+    public final BooleanProperty mobs = new BooleanProperty("mobs", false);
+    public final BooleanProperty invisibles = new BooleanProperty("invisibles", false);
+    public final BooleanProperty teams = new BooleanProperty("teams", true);
+    public final BooleanProperty botCheck = new BooleanProperty("bot-check", true);
+    public final BooleanProperty yieldToKillAura = new BooleanProperty("yield-to-killaura", true);
+
+    /** The target chosen this tick, and the bone on it being aimed at. */
+    private EntityLivingBase current;
+    private Bone currentBone;
+    /** Kept between ticks so the visible path can keep stepping toward the same bone. */
+    private Rotator rotator;
+    private int rotatorKind = -1;
+    /** Silent mode only: the rotation being reported, which decays back to the real one. */
+    private Rotation silent;
+    private long lastFrameNanos;
 
     public AimAssist() {
-        super("AimAssist", false, false, "Assists your aim by subtly adjusting your view towards nearby targets when attacking.");
+        super("AimAssist", false, false, "Bone-based aim assist with humanised rotation");
     }
 
-    @EventTarget
-    public void onTick(TickEvent event) {
-        if (!this.isEnabled() || event.getType() != EventType.POST || mc.currentScreen != null) return;
-        if ("Normal".equals(this.mode.getModeString())) tickNormal();
-        else tickLockOn();
+    @Override
+    public void onEnabled() {
+        this.reset();
     }
 
-    // ==================== Normal 模式 ====================
-    private void tickNormal() {
-        if (this.weaponOnly.getValue() && !ItemUtil.hasRawUnbreakingEnchant() && !(this.allowTools.getValue() && ItemUtil.isHoldingTool())) return;
-        boolean attacking = PlayerUtil.isAttacking();
-        if (!attacking || !this.isLookingAtBlock()) {
-            if (attacking || !this.timer.hasTimeElapsed(350L)) {
-                EntityPlayer player = selectTarget();
-                if (player != null && !(RotationUtil.distanceToEntity(player) <= 0.0)) {
-                    AxisAlignedBB axisAlignedBB = player.getEntityBoundingBox();
-                    double collisionBorderSize = player.getCollisionBorderSize();
-                    float[] rotation = RotationUtil.getRotationsToBox(
-                            axisAlignedBB.expand(collisionBorderSize, collisionBorderSize, collisionBorderSize),
-                            mc.thePlayer.rotationYaw, mc.thePlayer.rotationPitch, 180.0F,
-                            (float) this.smoothing.getValue() / 100.0F);
-                    float yaw = Math.min(Math.abs(this.hSpeed.getValue()), 10.0F);
-                    float pitch = Math.min(Math.abs(this.vSpeed.getValue()), 10.0F);
-                    Myau.rotationManager.setRotation(
-                            mc.thePlayer.rotationYaw + (rotation[0] - mc.thePlayer.rotationYaw) * 0.1F * yaw,
-                            mc.thePlayer.rotationPitch + (rotation[1] - mc.thePlayer.rotationPitch) * 0.1F * pitch, 0, false);
-                }
+    @Override
+    public void onDisabled() {
+        this.reset();
+        this.silent = null;
+    }
+
+    private void reset() {
+        this.current = null;
+        this.currentBone = null;
+        this.rotator = null;
+        this.rotatorKind = -1;
+        this.lastFrameNanos = 0L;
+    }
+
+    /** The entity being assisted onto, for other modules and the HUD. Null when idle. */
+    public EntityLivingBase getTarget() {
+        return this.isEnabled() ? this.current : null;
+    }
+
+    private RotationConfig config() {
+        float smooth = Math.max(0.0F, Math.min(1.0F, this.smoothness.getValue() / 100.0F));
+        int curve = this.rotation.getValue();
+        return this.mode.getValue() == MODE_SILENT
+                ? RotationConfig.silent(smooth, curve)
+                : RotationConfig.visible(smooth, curve);
+    }
+
+    /** The live rotator, rebuilt when the curve is switched so no state carries across. */
+    private Rotator rotator() {
+        int kind = this.rotation.getValue();
+        if (this.rotator == null || this.rotatorKind != kind) {
+            this.rotatorKind = kind;
+            this.rotator = this.config().createRotator();
+        }
+        return this.rotator;
+    }
+
+    private boolean boneEnabled(Bone bone) {
+        switch (bone) {
+            case MULTIPOINT:
+                return this.boneMultipoint.getValue();
+            case HEAD:
+                return this.boneHead.getValue();
+            case BODY:
+                return this.boneBody.getValue();
+            case LEFT_ARM:
+            case RIGHT_ARM:
+                return this.boneArms.getValue();
+            case LEFT_LEG:
+            case RIGHT_LEG:
+                return this.boneLegs.getValue();
+            default:
+                return false;
+        }
+    }
+
+    /** True while the client should be aiming at all: in a world, not in a menu, allowed to aim. */
+    private boolean canAim() {
+        if (mc.thePlayer == null || mc.theWorld == null || mc.currentScreen != null) {
+            return false;
+        }
+        if (mc.thePlayer.isDead || mc.thePlayer.getHealth() <= 0.0F) {
+            return false;
+        }
+        if (this.onHold.getValue() && !mc.gameSettings.keyBindAttack.isKeyDown()) {
+            return false;
+        }
+        if (this.weaponsOnly.getValue() && !ItemUtil.hasRawUnbreakingEnchant() && !ItemUtil.isHoldingTool()) {
+            return false;
+        }
+        return !this.yieldToKillAura.getValue() || !this.killAuraBusy();
+    }
+
+    /** KillAura owns the rotation while it has a target; two modules aiming at once looks wrong. */
+    private boolean killAuraBusy() {
+        if (Myau.moduleManager == null) {
+            return false;
+        }
+        Module module = Myau.moduleManager.modules.get(KillAura.class);
+        if (!(module instanceof KillAura) || !module.isEnabled()) {
+            return false;
+        }
+        return ((KillAura) module).getTarget() != null;
+    }
+
+    private boolean targeted(EntityPlayerSP player, EntityLivingBase entity) {
+        if (entity == player || entity == mc.getRenderViewEntity() || entity.isDead || entity.deathTime > 0) {
+            return false;
+        }
+        if (entity.getHealth() <= 0.0F) {
+            return false;
+        }
+        // Distance first: it is a subtraction, while the team, bot and line-of-sight checks below
+        // are string work and a ray trace. In a full lobby that ordering is the whole cost.
+        double reach = this.range.getValue();
+        if (player.getDistanceSqToEntity(entity) > reach * reach) {
+            return false;
+        }
+        if (entity instanceof EntityPlayer) {
+            if (!this.players.getValue()) {
+                return false;
             }
+            EntityPlayer target = (EntityPlayer) entity;
+            if (TeamUtil.isFriend(target)) {
+                return false;
+            }
+            if (this.teams.getValue() && TeamUtil.isSameTeam(target)) {
+                return false;
+            }
+            if (this.botCheck.getValue() && TeamUtil.isBot(target)) {
+                return false;
+            }
+        } else if (!this.mobs.getValue()) {
+            return false;
         }
+        if (!this.invisibles.getValue() && entity.isInvisible()) {
+            return false;
+        }
+        return player.canEntityBeSeen(entity);
     }
 
-    // ==================== LockOn 模式（部位死区 + Noise + 角度瞄准） ====================
-    private void tickLockOn() {
-        if (!mc.gameSettings.keyBindAttack.isKeyDown()) return;
-        if (isLookingAtBlock()) return;
-        if (this.weaponOnly.getValue() && !ItemUtil.hasRawUnbreakingEnchant() && !(this.allowTools.getValue() && ItemUtil.isHoldingTool())) return;
-
-        EntityPlayer target = selectTarget();
-        if (target == null) return;
-
-        // 1. 将人体分为头/躯干/腿三部分（参考 KillAura）
-        AxisAlignedBB fullBox = target.getEntityBoundingBox();
-        double bbHeight = fullBox.maxY - fullBox.minY;
-        double headSize = bbHeight / 4.5F;
-        double torsoSize = bbHeight / 2.75F;
-        AxisAlignedBB headBox = new AxisAlignedBB(fullBox.minX, fullBox.maxY - headSize, fullBox.minZ, fullBox.maxX, fullBox.maxY, fullBox.maxZ);
-        AxisAlignedBB torsoBox = new AxisAlignedBB(fullBox.minX, fullBox.minY + torsoSize, fullBox.minZ, fullBox.maxX, fullBox.maxY - headSize, fullBox.maxZ);
-        AxisAlignedBB feetBox = new AxisAlignedBB(fullBox.minX, fullBox.minY, fullBox.minZ, fullBox.maxX, fullBox.minY + torsoSize, fullBox.maxZ);
-
-        // 根据safeZone选择死区
-        AxisAlignedBB safeBox;
-        String zone = this.safeZone.getModeString();
-        if ("Head".equals(zone)) safeBox = headBox;
-        else if ("Feet".equals(zone)) safeBox = feetBox;
-        else safeBox = torsoBox;
-
-        // 2. 将安全区8角投影到屏幕，判断准星是否在框内
+    /**
+     * Picks the target and the bone on it. The bone must sit inside the FOV cone; among the
+     * targets that qualify, the configured priority breaks the tie.
+     */
+    private void selectTarget() {
+        this.current = null;
+        this.currentBone = null;
         EntityPlayerSP player = mc.thePlayer;
-        float partialTicks = 1.0F;
-        Vec3 playerPos = new Vec3(
-                player.lastTickPosX + (player.posX - player.lastTickPosX) * partialTicks,
-                player.lastTickPosY + (player.posY - player.lastTickPosY) * partialTicks + player.getEyeHeight(),
-                player.lastTickPosZ + (player.posZ - player.lastTickPosZ) * partialTicks
-        );
+        Vec3 eye = player.getPositionEyes(1.0F);
+        Vec3 look = player.getLook(1.0F);
+        double halfFov = this.fov.getValue() * 0.5;
+        double bestScore = Double.MAX_VALUE;
 
-        Vec3[] safeCorners = new Vec3[]{
-                new Vec3(safeBox.minX, safeBox.minY, safeBox.minZ),
-                new Vec3(safeBox.maxX, safeBox.minY, safeBox.minZ),
-                new Vec3(safeBox.minX, safeBox.minY, safeBox.maxZ),
-                new Vec3(safeBox.maxX, safeBox.minY, safeBox.maxZ),
-                new Vec3(safeBox.minX, safeBox.maxY, safeBox.minZ),
-                new Vec3(safeBox.maxX, safeBox.maxY, safeBox.minZ),
-                new Vec3(safeBox.minX, safeBox.maxY, safeBox.maxZ),
-                new Vec3(safeBox.maxX, safeBox.maxY, safeBox.maxZ)
-        };
+        for (int i = 0; i < mc.theWorld.loadedEntityList.size(); i++) {
+            Entity entity = mc.theWorld.loadedEntityList.get(i);
+            if (!(entity instanceof EntityLivingBase)) {
+                continue;
+            }
+            EntityLivingBase living = (EntityLivingBase) entity;
+            if (!this.targeted(player, living)) {
+                continue;
+            }
 
-        int screenWidth = mc.displayWidth;
-        int screenHeight = mc.displayHeight;
-        double aimX = screenWidth / 2.0;
-        double aimY = screenHeight / 2.0;
+            Bone closest = null;
+            double closestAngle = halfFov;
+            for (int b = 0; b < Bone.ALL.length; b++) {
+                Bone bone = Bone.ALL[b];
+                if (!this.boneEnabled(bone)) {
+                    continue;
+                }
+                double angle = angleBetween(look, bone.point(player, living, 1.0F).subtract(eye));
+                if (angle >= closestAngle) {
+                    continue;
+                }
+                closest = bone;
+                closestAngle = angle;
+            }
+            if (closest == null) {
+                continue;
+            }
 
-        double boxLeft = Double.MAX_VALUE, boxRight = -Double.MAX_VALUE;
-        double boxTop = Double.MAX_VALUE, boxBottom = -Double.MAX_VALUE;
-
-        for (Vec3 corner : safeCorners) {
-            double[] screenPos = worldToScreen(corner, playerPos, player.rotationYaw, player.rotationPitch);
-            if (screenPos == null) continue;
-            if (screenPos[0] < boxLeft) boxLeft = screenPos[0];
-            if (screenPos[0] > boxRight) boxRight = screenPos[0];
-            if (screenPos[1] < boxTop) boxTop = screenPos[1];
-            if (screenPos[1] > boxBottom) boxBottom = screenPos[1];
-        }
-
-        // 3. 矩形死区判断：准星在安全区 → 零吸附
-        boolean inBox = boxLeft != Double.MAX_VALUE
-                && aimX >= boxLeft && aimX <= boxRight
-                && aimY >= boxTop && aimY <= boxBottom;
-
-        // === 物理隔离：手动自由区 ===
-        if (inBox) return;
-
-        // === 非自由区：角度瞄准（与 Normal 一致） ===
-        double border = target.getCollisionBorderSize();
-        AxisAlignedBB aimBox = safeBox.expand(border, border, border);
-        float[] rotation = RotationUtil.getRotationsToBox(
-                aimBox,
-                mc.thePlayer.rotationYaw, mc.thePlayer.rotationPitch, 180.0F,
-                (float) this.smoothing.getValue() / 100.0F);
-        float yaw = Math.min(Math.abs(this.hSpeed.getValue()), 10.0F);
-        float pitch = Math.min(Math.abs(this.vSpeed.getValue()), 10.0F);
-        float targetYaw = mc.thePlayer.rotationYaw + (rotation[0] - mc.thePlayer.rotationYaw) * 0.1F * yaw;
-        float targetPitch = mc.thePlayer.rotationPitch + (rotation[1] - mc.thePlayer.rotationPitch) * 0.1F * pitch;
-
-        // === Noise 随机偏移 ===
-        if (noiseEnabled.getValue()) {
-            updateNoise();
-            targetYaw += (float) noiseYaw;
-            targetPitch += (float) noisePitch;
-        }
-
-        Myau.rotationManager.setRotation(targetYaw, targetPitch, 0, false);
-    }
-
-    /**
-     * 更新 Noise 随机偏移（按 noise-speed 控制变化频率）
-     */
-    private void updateNoise() {
-        long now = System.currentTimeMillis();
-        long interval = (long) (1000.0 / noiseSpeed.getValue());
-        if (now - lastNoiseTime >= interval) {
-            lastNoiseTime = now;
-            double minYaw = noiseMinYaw.getValue();
-            double maxYaw = noiseMaxYaw.getValue();
-            double minPitch = noiseMinPitch.getValue();
-            double maxPitch = noiseMaxPitch.getValue();
-            noiseYaw = minYaw + Math.random() * (maxYaw - minYaw);
-            if (Math.random() < 0.5) noiseYaw = -noiseYaw;
-            noisePitch = minPitch + Math.random() * (maxPitch - minPitch);
-            if (Math.random() < 0.5) noisePitch = -noisePitch;
+            double score = this.priority.getValue() == PRIORITY_HEALTH ? living.getHealth() : closestAngle;
+            if (score >= bestScore) {
+                continue;
+            }
+            bestScore = score;
+            this.current = living;
+            this.currentBone = closest;
         }
     }
 
-    /**
-     * 将世界坐标投影到屏幕坐标
-     * 返回 [screenX, screenY] 或 null（在相机后方）
-     */
-    private double[] worldToScreen(Vec3 worldPos, Vec3 cameraPos, float cameraYaw, float cameraPitch) {
-        double dx = worldPos.xCoord - cameraPos.xCoord;
-        double dy = worldPos.yCoord - cameraPos.yCoord;
-        double dz = worldPos.zCoord - cameraPos.zCoord;
-
-        double yawRad = Math.toRadians(cameraYaw);
-        double pitchRad = Math.toRadians(cameraPitch);
-
-        double cosYaw = Math.cos(-yawRad);
-        double sinYaw = Math.sin(-yawRad);
-        double x1 = dx * cosYaw - dz * sinYaw;
-        double z1 = dx * sinYaw + dz * cosYaw;
-        double y1 = dy;
-
-        double cosPitch = Math.cos(-pitchRad);
-        double sinPitch = Math.sin(-pitchRad);
-        double x2 = x1;
-        double y2 = y1 * cosPitch - z1 * sinPitch;
-        double z2 = y1 * sinPitch + z1 * cosPitch;
-
-        if (z2 <= 0) return null;
-
-        int screenWidth = mc.displayWidth;
-        int screenHeight = mc.displayHeight;
-        double fov = 70.0;
-        double fovRad = Math.toRadians(fov);
-        double aspect = (double) screenWidth / (double) screenHeight;
-        double tanHalfFov = Math.tan(fovRad / 2.0);
-
-        double screenX = (x2 / z2) / (tanHalfFov * aspect) * (screenWidth / 2.0) + screenWidth / 2.0;
-        double screenY = (y2 / z2) / tanHalfFov * (screenHeight / 2.0) + screenHeight / 2.0;
-
-        return new double[]{screenX, screenY};
+    /** Where the view should be pointing right now, at the given partial tick. */
+    private Rotation aimAt(float partialTicks) {
+        return Rotation.toward(mc.thePlayer.getPositionEyes(partialTicks),
+                this.currentBone.point(mc.thePlayer, this.current, partialTicks));
     }
 
     @EventTarget
-    public void onPress(KeyEvent event) {
-        if (event.getKey() == mc.gameSettings.keyBindAttack.getKeyCode() && !Myau.moduleManager.modules.get(AutoClicker.class).isEnabled()) {
-            this.timer.reset();
+    public void onUpdate(UpdateEvent event) {
+        if (event.getType() != EventType.PRE) {
+            return;
         }
+        if (!this.canAim()) {
+            this.current = null;
+            this.currentBone = null;
+            this.decaySilent(event);
+            return;
+        }
+
+        this.selectTarget();
+        if (this.current == null || this.currentBone == null) {
+            this.decaySilent(event);
+            return;
+        }
+
+        if (this.mode.getValue() != MODE_SILENT) {
+            // Regular mode turns the view itself, once per frame, in onRender3D.
+            this.silent = null;
+            return;
+        }
+
+        Rotation actual = Rotation.of(mc.thePlayer);
+        Rotation from = this.silent != null ? this.silent : actual;
+        Rotation stepped = this.rotator().step(from, this.aimAt(1.0F), this.config(), 1.0F);
+        this.silent = quantize(stepped, event.getYaw(), event.getPitch());
+        event.setRotation(this.silent.yaw, this.silent.pitch, ROTATION_PRIORITY);
+    }
+
+    /**
+     * With no target the reported rotation walks back to the real one instead of snapping to it,
+     * which would otherwise be a jump no mouse could produce.
+     */
+    private void decaySilent(UpdateEvent event) {
+        if (this.silent == null || mc.thePlayer == null) {
+            this.silent = null;
+            this.rotator = null;
+            return;
+        }
+        Rotation actual = Rotation.of(mc.thePlayer);
+        Rotation stepped = this.rotator().step(this.silent, actual, this.config(), 1.0F);
+        Rotation next = quantize(stepped, event.getYaw(), event.getPitch());
+        if (next.distanceTo(actual) < (float) RotationUtil.gcd()) {
+            this.silent = null;
+            this.rotator = null;
+            return;
+        }
+        this.silent = next;
+        event.setRotation(next.yaw, next.pitch, ROTATION_PRIORITY);
+    }
+
+    @EventTarget
+    public void onRender3D(Render3DEvent event) {
+        long now = System.nanoTime();
+        float deltaTicks = this.lastFrameNanos == 0L ? 0.0F
+                : Math.min(4.0F, Math.max(0.0F, (now - this.lastFrameNanos) / 1.0e9F * 20.0F));
+        this.lastFrameNanos = now;
+
+        if (this.mode.getValue() == MODE_SILENT || this.current == null || this.currentBone == null) {
+            return;
+        }
+        if (deltaTicks <= 0.0F || mc.thePlayer == null || mc.theWorld == null || mc.currentScreen != null) {
+            return;
+        }
+        if (this.current.isDead || this.current.getHealth() <= 0.0F) {
+            return;
+        }
+
+        float partialTicks = Math.max(0.0F, Math.min(1.0F, event.getPartialTicks()));
+        Rotation actual = Rotation.of(mc.thePlayer);
+        Rotation next = this.rotator().step(actual, this.aimAt(partialTicks), this.config(), deltaTicks);
+
+        float deltaYaw = actual.yawTo(next);
+        float deltaPitch = actual.pitchTo(next);
+        if (deltaYaw == 0.0F && deltaPitch == 0.0F) {
+            return;
+        }
+        // setAngles is the vanilla mouse path: yaw += x * 0.15, pitch -= y * 0.15, then clamped.
+        // It carries prevRotation along too, so the view does not smear across the frame.
+        mc.thePlayer.setAngles(deltaYaw / TURN_FACTOR, -deltaPitch / TURN_FACTOR);
+    }
+
+    /**
+     * Rounds onto the steps a real mouse produces at this sensitivity, measured from the last
+     * rotation the server was given.
+     */
+    private static Rotation quantize(Rotation rotation, float baseYaw, float basePitch) {
+        double step = RotationUtil.gcd();
+        if (step <= 0.0) {
+            return rotation;
+        }
+        float yaw = baseYaw + (float) (Math.round((rotation.yaw - baseYaw) / step) * step);
+        float pitch = basePitch + (float) (Math.round((rotation.pitch - basePitch) / step) * step);
+        return new Rotation(yaw, MathHelper.clamp_float(pitch, -90.0F, 90.0F));
+    }
+
+    /** Angle between two vectors, in degrees. */
+    private static double angleBetween(Vec3 first, Vec3 second) {
+        if (second.lengthVector() <= 1.0E-7) {
+            return 0.0;
+        }
+        double cosine = first.normalize().dotProduct(second.normalize());
+        return Math.toDegrees(Math.acos(Math.max(-1.0, Math.min(1.0, cosine))));
+    }
+
+    @Override
+    public String[] getSuffix() {
+        return new String[]{this.mode.getModeString()};
     }
 }
