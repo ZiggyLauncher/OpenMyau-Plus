@@ -13,7 +13,6 @@ import myau.property.properties.ModeProperty;
 import myau.property.properties.PercentProperty;
 import myau.ui.ModuleCategories;
 import myau.util.KeyBindUtil;
-import myau.util.RenderUtil;
 import myau.util.font.FontManager;
 import myau.util.font.impl.FontRenderer;
 import myau.util.shader.RoundedUtils;
@@ -25,22 +24,19 @@ import org.lwjgl.input.Mouse;
 import java.awt.Color;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * A click GUI in the style of the adin client: one dark rounded window, a narrow sidebar whose
- * selection is an accent pill that slides and squashes between categories, and a scrolling list of
- * module rows that expand in place to reveal their settings.
+ * selection is an accent pill that slides and squashes between categories, a list of module rows
+ * carrying their descriptions, and a settings overlay that reveals row by row over the list.
  * <p>
  * Layout and hit testing are the same pass. Every frame {@link #rebuild()} produces the list of
- * rectangles that will be drawn, and clicks and scrolls are resolved against that same list, so
- * there is no way for a drawn row and its clickable area to disagree - which is exactly the bug
- * that made the Raven skin select several modules at once while scrolled.
+ * rectangles that will be drawn, and clicks, drags and scrolls resolve against that same list, so
+ * a drawn row and its clickable area cannot disagree.
  * <p>
  * The window never scales below 1:1. Shrinking it would not shrink the bitmap fonts with it, so on
- * a small scaled resolution it is clipped and scrolled instead of squashed.
+ * a small scaled resolution it is clipped and scrolled rather than squashed.
  */
 public class AdinClickGui extends GuiScreen {
     private static final int BASE_WIDTH = 375;
@@ -57,23 +53,32 @@ public class AdinClickGui extends GuiScreen {
     private static final int PILL_RADIUS = 6;
     private static final float PILL_STRETCH = 0.16F;
 
-    private static final int ROW_HEIGHT = 26;
-    private static final int ROW_GAP = 5;
-    private static final int ROW_RADIUS = 5;
-    private static final int SETTING_HEIGHT = 17;
-    private static final int SLIDER_HEIGHT = 24;
-    private static final int TRACK_HEIGHT = 3;
+    private static final int ROW_HEIGHT = 40;
+    private static final int ROW_STRIDE = 46;
+    private static final int ROW_RADIUS = 6;
+    private static final int LABEL_INSET = 10;
+    private static final int DESCRIPTION_LINES = 2;
+    private static final int DESCRIPTION_PITCH = 9;
+    private static final int GEAR_SIZE = 16;
 
-    private static final int TOGGLE_WIDTH = 20;
-    private static final int TOGGLE_HEIGHT = 11;
-    private static final int SMALL_TOGGLE_WIDTH = 16;
-    private static final int SMALL_TOGGLE_HEIGHT = 9;
+    private static final int OVERLAY_PADDING = 6;
+    private static final int OVERLAY_RADIUS = 6;
+    private static final int OVERLAY_HEADER = 20;
+    private static final int OVERLAY_REVEAL_MILLIS = 180;
+    private static final int ROW_STAGGER_MILLIS = 22;
 
-    private static final int SCROLL_STEP = 24;
+    private static final int SETTING_ROW_HEIGHT = 22;
+    private static final int SETTING_ROW_STRIDE = 24;
+    private static final int BIND_WIDTH = 42;
+    private static final int BIND_HEIGHT = 16;
+    private static final int CONTROL_HEIGHT = 16;
+
+    private static final float SCROLL_STEP = 28.0F;
+    /** Seconds for the scroll to cover most of the remaining distance, frame rate independent. */
+    private static final float SCROLL_SPEED = 18.0F;
 
     private static AdinClickGui instance;
 
-    /** What a laid-out rectangle does when it is clicked. */
     private enum RowKind {
         MODULE, SETTING_BOOLEAN, SETTING_SLIDER, SETTING_MODE, SETTING_COLOR, SETTING_TEXT, KEYBIND
     }
@@ -82,10 +87,11 @@ public class AdinClickGui extends GuiScreen {
         RowKind kind;
         Module module;
         Property<?> property;
-        int x;
-        int y;
-        int width;
-        int height;
+        int index;
+        float x;
+        float y;
+        float width;
+        float height;
 
         boolean contains(int mouseX, int mouseY) {
             return mouseX >= this.x && mouseX < this.x + this.width
@@ -93,21 +99,25 @@ public class AdinClickGui extends GuiScreen {
         }
     }
 
-    private final Set<Module> expanded = new HashSet<Module>();
     private final List<Row> rows = new ArrayList<Row>();
     private final AdinTransition pillY = new AdinTransition(0.0F, 210, AdinTransition.EASE_OUT_EXPO);
 
     private ModuleCategories.Category selected = ModuleCategories.Category.COMBAT;
     private boolean pillPlaced;
 
-    private int panelX;
-    private int panelY;
+    private Module openModule;
+    private long overlayOpenedAt;
+
+    private float panelX;
+    private float panelY;
     private int panelWidth;
     private int panelHeight;
-    private int contentHeight;
+    private int contentExtent;
+    private float valueColumn = 24.0F;
 
     private float scroll;
     private float targetScroll;
+    private long lastFrameNanos;
     private Property<?> dragging;
     private Module binding;
 
@@ -126,9 +136,11 @@ public class AdinClickGui extends GuiScreen {
     public void initGui() {
         super.initGui();
         FontManager.initializeFonts();
+        AdinControls.reset();
         this.dragging = null;
         this.binding = null;
         this.pillPlaced = false;
+        this.lastFrameNanos = 0L;
     }
 
     @Override
@@ -136,85 +148,129 @@ public class AdinClickGui extends GuiScreen {
         return false;
     }
 
+    // ---------------------------------------------------------------- fonts
+
+    private static FontRenderer titleFont() {
+        return FontManager.productSans18;
+    }
+
+    private static FontRenderer bodyFont() {
+        return FontManager.productSans16;
+    }
+
+    private static FontRenderer smallFont() {
+        return FontManager.productSans12 != null ? FontManager.productSans12 : FontManager.productSans16;
+    }
+
     // ---------------------------------------------------------------- layout
 
     private void computePanel() {
         ScaledResolution sr = new ScaledResolution(this.mc);
-        this.panelWidth = Math.max(160, Math.min(BASE_WIDTH, sr.getScaledWidth() - SCREEN_MARGIN * 2));
-        this.panelHeight = Math.max(120, Math.min(BASE_HEIGHT, sr.getScaledHeight() - SCREEN_MARGIN * 2));
+        this.panelWidth = Math.max(170, Math.min(BASE_WIDTH, sr.getScaledWidth() - SCREEN_MARGIN * 2));
+        this.panelHeight = Math.max(130, Math.min(BASE_HEIGHT, sr.getScaledHeight() - SCREEN_MARGIN * 2));
         this.panelX = (sr.getScaledWidth() - this.panelWidth) / 2;
         this.panelY = (sr.getScaledHeight() - this.panelHeight) / 2;
     }
 
-    private int contentX() {
+    private float contentX() {
         return this.panelX + SIDEBAR_WIDTH;
     }
 
-    private int contentY() {
+    private float contentY() {
         return this.panelY + TOP_BAR_HEIGHT;
     }
 
-    private int contentWidth() {
+    private float contentWidth() {
         return this.panelWidth - SIDEBAR_WIDTH;
     }
 
-    private int viewportHeight() {
-        return this.panelHeight - TOP_BAR_HEIGHT - PADDING;
+    private float contentBottom() {
+        return this.panelY + this.panelHeight;
     }
 
-    /**
-     * Lays out every clickable rectangle for the current category and scroll offset. Called once
-     * per frame before drawing, and again before handling input so a click can never be resolved
-     * against a stale layout.
-     */
+    private int viewportHeight() {
+        return (int) (this.contentBottom() - this.contentY() - PADDING);
+    }
+
+    private float overlayX() {
+        return this.contentX() + OVERLAY_PADDING;
+    }
+
+    private float overlayY() {
+        return this.contentY() + OVERLAY_PADDING;
+    }
+
+    private float overlayWidth() {
+        return this.contentWidth() - OVERLAY_PADDING * 2;
+    }
+
+    private float overlayHeight() {
+        return this.contentBottom() - this.overlayY() - OVERLAY_PADDING;
+    }
+
+    private float overlayListY() {
+        return this.overlayY() + OVERLAY_HEADER;
+    }
+
     private void rebuild() {
         this.computePanel();
         this.rows.clear();
 
-        int rowX = this.contentX() + PADDING;
-        int rowWidth = Math.max(40, this.contentWidth() - PADDING * 2);
-        int y = this.contentY() + PADDING - Math.round(this.scroll);
+        if (this.openModule != null) {
+            this.rebuildSettings();
+            return;
+        }
+
+        float rowX = this.contentX() + PADDING;
+        float rowWidth = Math.max(60.0F, this.contentWidth() - PADDING * 2);
+        float y = this.contentY() + PADDING - this.scroll;
+        int index = 0;
 
         for (Module module : ModuleCategories.modules(this.selected)) {
             if (module == null || module.isHidden()) {
                 continue;
             }
-            this.rows.add(row(RowKind.MODULE, module, null, rowX, y, rowWidth, ROW_HEIGHT));
-            y += ROW_HEIGHT;
-
-            if (this.expanded.contains(module)) {
-                int settingX = rowX + 8;
-                int settingWidth = rowWidth - 16;
-                List<Property<?>> properties = properties(module);
-                for (int i = 0; i < properties.size(); i++) {
-                    Property<?> property = properties.get(i);
-                    if (property == null || !property.isVisible()) {
-                        continue;
-                    }
-                    RowKind kind = kindOf(property);
-                    if (kind == null) {
-                        continue;
-                    }
-                    int height = kind == RowKind.SETTING_SLIDER || kind == RowKind.SETTING_COLOR
-                            ? SLIDER_HEIGHT : SETTING_HEIGHT;
-                    this.rows.add(row(kind, module, property, settingX, y, settingWidth, height));
-                    y += height;
-                }
-                this.rows.add(row(RowKind.KEYBIND, module, null, settingX, y, settingWidth, SETTING_HEIGHT));
-                y += SETTING_HEIGHT + 3;
-            }
-            y += ROW_GAP;
+            this.rows.add(row(RowKind.MODULE, module, null, index++, rowX, y, rowWidth, ROW_HEIGHT));
+            y += ROW_STRIDE;
         }
-
-        int bottom = y + Math.round(this.scroll);
-        this.contentHeight = Math.max(0, bottom - (this.contentY() + PADDING));
+        this.contentExtent = (int) Math.max(0.0F, (y + this.scroll) - (this.contentY() + PADDING));
     }
 
-    private static Row row(RowKind kind, Module module, Property<?> property, int x, int y, int width, int height) {
+    private void rebuildSettings() {
+        float rowX = this.overlayX() + OVERLAY_PADDING;
+        float rowWidth = Math.max(60.0F, this.overlayWidth() - OVERLAY_PADDING * 2);
+        float y = this.overlayListY() - this.scroll;
+        int index = 0;
+
+        FontRenderer font = bodyFont();
+        float widestValue = 24.0F;
+
+        for (Property<?> property : properties(this.openModule)) {
+            if (property == null || !property.isVisible()) {
+                continue;
+            }
+            RowKind kind = kindOf(property);
+            this.rows.add(row(kind, this.openModule, property, index++, rowX, y, rowWidth, SETTING_ROW_HEIGHT));
+            y += SETTING_ROW_STRIDE;
+            if (kind == RowKind.SETTING_SLIDER) {
+                widestValue = Math.max(widestValue, AdinControls.width(font, boundsText(property)) + 8.0F);
+            }
+        }
+        this.rows.add(row(RowKind.KEYBIND, this.openModule, null, index, rowX, y, rowWidth, SETTING_ROW_HEIGHT));
+        y += SETTING_ROW_STRIDE;
+
+        // Every slider shares one value column, so their tracks all end in line.
+        this.valueColumn = widestValue;
+        this.contentExtent = (int) Math.max(0.0F, (y + this.scroll) - this.overlayListY());
+    }
+
+    private static Row row(RowKind kind, Module module, Property<?> property, int index,
+                           float x, float y, float width, float height) {
         Row created = new Row();
         created.kind = kind;
         created.module = module;
         created.property = property;
+        created.index = index;
         created.x = x;
         created.y = y;
         created.width = width;
@@ -223,7 +279,7 @@ public class AdinClickGui extends GuiScreen {
     }
 
     private static List<Property<?>> properties(Module module) {
-        if (Myau.propertyManager == null) {
+        if (Myau.propertyManager == null || module == null) {
             return new ArrayList<Property<?>>();
         }
         List<Property<?>> list = Myau.propertyManager.properties.get(module);
@@ -244,20 +300,44 @@ public class AdinClickGui extends GuiScreen {
         if (property instanceof ColorProperty) {
             return RowKind.SETTING_COLOR;
         }
-        // Anything else is shown read-only rather than silently hidden.
         return RowKind.SETTING_TEXT;
+    }
+
+    // Sub-rectangles inside a row, shared by drawing and hit testing.
+    private static float toggleX(Row row) {
+        return row.x + row.width - LABEL_INSET - AdinControls.TOGGLE_WIDTH;
+    }
+
+    private static float gearX(Row row) {
+        return toggleX(row) - 6.0F - GEAR_SIZE;
+    }
+
+    private static float controlX(Row row) {
+        return row.x + Math.max(64.0F, row.width * 0.42F);
+    }
+
+    private static float controlWidth(Row row) {
+        return Math.max(30.0F, row.x + row.width - LABEL_INSET - controlX(row));
     }
 
     // ---------------------------------------------------------------- drawing
 
     @Override
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
+        long now = System.nanoTime();
+        float delta = this.lastFrameNanos == 0L ? 0.0F
+                : Math.min(0.1F, Math.max(0.0F, (now - this.lastFrameNanos) / 1.0e9F));
+        this.lastFrameNanos = now;
+
         this.drawDefaultBackground();
         this.rebuild();
-        this.updateScroll();
+        // Dragging is applied before the layout is drawn, so the knob lands under the cursor on
+        // this frame rather than the next one.
         if (this.dragging != null) {
             this.applyDrag(mouseX);
+            this.rebuild();
         }
+        this.updateScroll(delta);
 
         int accent = AdinTheme.accent();
 
@@ -268,26 +348,31 @@ public class AdinClickGui extends GuiScreen {
 
         this.drawBrand(accent);
         this.drawSidebar(accent, mouseX, mouseY);
-        this.drawContent(accent, mouseX, mouseY);
+
+        if (this.openModule == null) {
+            this.drawModuleList(accent, mouseX, mouseY);
+        } else {
+            this.drawOverlay(accent, mouseX, mouseY);
+        }
 
         super.drawScreen(mouseX, mouseY, partialTicks);
     }
 
     private void drawBrand(int accent) {
-        FontRenderer font = FontManager.productSans18;
+        FontRenderer font = titleFont();
         String name = "Ziggy";
         String suffix = ".client";
-        float textY = this.panelY + (TOP_BAR_HEIGHT - height(font)) / 2.0F;
+        float textY = this.panelY + (TOP_BAR_HEIGHT - AdinControls.height(font)) / 2.0F;
         float x = this.panelX + SIDEBAR_INSET;
-        draw(font, name, x, textY, AdinTheme.TEXT);
-        draw(font, suffix, x + width(font, name), textY, accent);
+        AdinControls.drawText(font, name, x, textY, AdinTheme.TEXT);
+        AdinControls.drawText(font, suffix, x + AdinControls.width(font, name), textY, accent);
     }
 
     private void drawSidebar(int accent, int mouseX, int mouseY) {
         ModuleCategories.Category[] categories = ModuleCategories.Category.values();
-        int tabX = this.panelX + SIDEBAR_INSET;
-        int tabWidth = SIDEBAR_WIDTH - SIDEBAR_INSET * 2;
-        int firstY = this.contentY() + PADDING;
+        float tabX = this.panelX + SIDEBAR_INSET;
+        float tabWidth = SIDEBAR_WIDTH - SIDEBAR_INSET * 2;
+        float firstY = this.contentY() + PADDING;
 
         int selectedIndex = 0;
         for (int i = 0; i < categories.length; i++) {
@@ -295,39 +380,38 @@ public class AdinClickGui extends GuiScreen {
                 selectedIndex = i;
             }
         }
-        int targetY = firstY + selectedIndex * TAB_STRIDE;
+        float targetY = firstY + selectedIndex * TAB_STRIDE;
         if (!this.pillPlaced) {
             this.pillY.snap(targetY);
             this.pillPlaced = true;
         }
         this.pillY.set(targetY);
 
-        // The pill stretches while it travels and relaxes as it lands.
         float pillTop = this.pillY.value();
         float pillHeight = TAB_HEIGHT * (1.0F + PILL_STRETCH * this.pillY.flight());
         RoundedUtils.drawRound(tabX, pillTop - (pillHeight - TAB_HEIGHT) * 0.5F, tabWidth, pillHeight,
                 PILL_RADIUS, AdinTheme.color(accent));
 
-        FontRenderer font = FontManager.productSans16;
+        FontRenderer font = bodyFont();
         for (int i = 0; i < categories.length; i++) {
-            int tabY = firstY + i * TAB_STRIDE;
+            float tabY = firstY + i * TAB_STRIDE;
             float centre = tabY + TAB_HEIGHT * 0.5F;
             boolean onPill = centre >= pillTop && centre < pillTop + TAB_HEIGHT;
             boolean hovered = mouseX >= tabX && mouseX < tabX + tabWidth
                     && mouseY >= tabY && mouseY < tabY + TAB_HEIGHT;
-
-            int textColor = onPill
-                    ? AdinTheme.ON_ACCENT
-                    : AdinTheme.lerp(AdinTheme.DIM, AdinTheme.TEXT, hovered ? 1.0F : 0.0F);
-            String label = categories[i].getLabel();
-            draw(font, label, tabX + 9, tabY + (TAB_HEIGHT - height(font)) / 2.0F, textColor);
+            int textColor = onPill ? AdinTheme.ON_ACCENT : (hovered ? AdinTheme.TEXT : AdinTheme.DIM);
+            AdinControls.drawText(font, categories[i].getLabel(), tabX + 9.0F,
+                    tabY + (TAB_HEIGHT - AdinControls.height(font)) / 2.0F, textColor);
         }
     }
 
-    private void drawContent(int accent, int mouseX, int mouseY) {
-        int clipY = this.contentY();
-        int clipHeight = this.panelHeight - TOP_BAR_HEIGHT;
-        RenderUtil.scissor(this.contentX(), clipY, this.contentWidth(), clipHeight);
+    private void drawModuleList(int accent, int mouseX, int mouseY) {
+        float clipY = this.contentY();
+        float clipHeight = this.contentBottom() - clipY;
+        AdinControls.scissor(this.contentX(), clipY, this.contentWidth(), clipHeight);
+
+        FontRenderer nameFont = bodyFont();
+        FontRenderer descriptionFont = smallFont();
 
         for (int i = 0; i < this.rows.size(); i++) {
             Row row = this.rows.get(i);
@@ -335,164 +419,209 @@ public class AdinClickGui extends GuiScreen {
                 continue;
             }
             boolean hovered = row.contains(mouseX, mouseY) && this.inViewport(mouseY);
-            switch (row.kind) {
-                case MODULE:
-                    this.drawModuleRow(row, accent, hovered);
-                    break;
-                case SETTING_BOOLEAN:
-                    this.drawBooleanRow(row, accent);
-                    break;
-                case SETTING_SLIDER:
-                    this.drawSliderRow(row, accent, hovered);
-                    break;
-                case SETTING_MODE:
-                    this.drawModeRow(row, accent, hovered);
-                    break;
-                case SETTING_COLOR:
-                    this.drawColorRow(row, hovered);
-                    break;
-                case KEYBIND:
-                    this.drawKeybindRow(row, accent, hovered);
-                    break;
-                case SETTING_TEXT:
-                default:
-                    this.drawTextRow(row);
-                    break;
+            RoundedUtils.drawRound(row.x, row.y, row.width, row.height, ROW_RADIUS,
+                    AdinTheme.color(hovered
+                            ? AdinTheme.lerp(AdinTheme.ROW, AdinTheme.CONTROL, 0.5F)
+                            : AdinTheme.ROW));
+
+            float textRight = gearX(row) - 6.0F;
+            float available = textRight - row.x - LABEL_INSET;
+            AdinControls.drawText(nameFont,
+                    AdinControls.fit(row.module.getName(), available, nameFont),
+                    row.x + LABEL_INSET, row.y + 6.0F,
+                    row.module.isEnabled() ? AdinTheme.TEXT : AdinTheme.MUTED);
+
+            String[] lines = wrap(row.module.getDescription(), available, descriptionFont);
+            for (int line = 0; line < lines.length; line++) {
+                AdinControls.drawText(descriptionFont, lines[line], row.x + LABEL_INSET,
+                        row.y + 19.0F + line * DESCRIPTION_PITCH, AdinTheme.MUTED);
+            }
+
+            float gear = gearX(row);
+            this.drawGear(gear, row.y + (row.height - GEAR_SIZE) / 2.0F, accent,
+                    mouseX >= gear && mouseX < gear + GEAR_SIZE
+                            && mouseY >= row.y && mouseY < row.y + row.height);
+
+            AdinControls.drawToggle(row.module, toggleX(row),
+                    row.y + (row.height - AdinControls.TOGGLE_HEIGHT) / 2.0F,
+                    AdinControls.TOGGLE_WIDTH, AdinControls.TOGGLE_HEIGHT,
+                    row.module.isEnabled(), accent);
+        }
+        AdinControls.releaseScissor();
+    }
+
+    /** A gear built from rects rather than a texture, so there is no atlas to ship or bind. */
+    private void drawGear(float x, float y, int accent, boolean hovered) {
+        int color = hovered ? accent : AdinTheme.DIM;
+        float centreX = x + GEAR_SIZE / 2.0F;
+        float centreY = y + GEAR_SIZE / 2.0F;
+        RoundedUtils.drawRound(centreX - 1.0F, centreY - 5.0F, 2.0F, 10.0F, 1.0F, AdinTheme.color(color));
+        RoundedUtils.drawRound(centreX - 5.0F, centreY - 1.0F, 10.0F, 2.0F, 1.0F, AdinTheme.color(color));
+        RoundedUtils.drawRound(centreX - 4.0F, centreY - 4.0F, 8.0F, 8.0F, 4.0F, AdinTheme.color(color));
+        RoundedUtils.drawRound(centreX - 1.5F, centreY - 1.5F, 3.0F, 3.0F, 1.5F,
+                AdinTheme.color(AdinTheme.ROW));
+    }
+
+    private void drawOverlay(int accent, int mouseX, int mouseY) {
+        RoundedUtils.drawRound(this.overlayX(), this.overlayY(), this.overlayWidth(), this.overlayHeight(),
+                OVERLAY_RADIUS, AdinTheme.color(AdinTheme.OVERLAY));
+
+        FontRenderer font = bodyFont();
+        float backX = this.overlayX() + OVERLAY_PADDING;
+        boolean backHovered = mouseX >= backX - 2 && mouseX < backX + 14
+                && mouseY >= this.overlayY() && mouseY < this.overlayY() + OVERLAY_HEADER;
+        float headerTextY = this.overlayY() + (OVERLAY_HEADER - AdinControls.height(font)) / 2.0F;
+        AdinControls.drawText(font, "<", backX, headerTextY, backHovered ? accent : AdinTheme.DIM);
+        AdinControls.drawText(font, this.openModule.getName(), backX + 12.0F, headerTextY, AdinTheme.TEXT);
+
+        float clipY = this.overlayListY();
+        float clipHeight = this.overlayY() + this.overlayHeight() - clipY - OVERLAY_PADDING;
+        AdinControls.scissor(this.overlayX(), clipY, this.overlayWidth(), clipHeight);
+
+        long elapsed = System.currentTimeMillis() - this.overlayOpenedAt;
+        for (int i = 0; i < this.rows.size(); i++) {
+            Row row = this.rows.get(i);
+            if (row.y + row.height < clipY || row.y > clipY + clipHeight) {
+                continue;
+            }
+            // Staggered reveal: each row fades and slides in just after the one above it.
+            float reveal = Math.max(0.0F, Math.min(1.0F,
+                    (elapsed - row.index * (long) ROW_STAGGER_MILLIS) / (float) OVERLAY_REVEAL_MILLIS));
+            if (reveal <= 0.0F) {
+                continue;
+            }
+            this.drawSettingRow(row, row.y + (1.0F - reveal) * 6.0F, reveal, accent, mouseX, mouseY);
+        }
+        AdinControls.releaseScissor();
+    }
+
+    private void drawSettingRow(Row row, float y, float reveal, int accent, int mouseX, int mouseY) {
+        FontRenderer font = bodyFont();
+        int labelColor = AdinTheme.alpha(AdinTheme.TEXT, reveal);
+        int mutedColor = AdinTheme.alpha(AdinTheme.DIM, reveal);
+        int fadedAccent = AdinTheme.alpha(accent, reveal);
+
+        float controlX = controlX(row);
+        float controlWidth = controlWidth(row);
+        float centreY = y + row.height * 0.5F;
+        String label = row.kind == RowKind.KEYBIND ? "Bind" : row.property.getName();
+        AdinControls.drawText(font,
+                AdinControls.fit(label, controlX - row.x - LABEL_INSET - 4.0F, font),
+                row.x + LABEL_INSET, centreY - AdinControls.height(font) * 0.5F, labelColor);
+
+        switch (row.kind) {
+            case SETTING_BOOLEAN: {
+                BooleanProperty property = (BooleanProperty) row.property;
+                AdinControls.drawToggle(property,
+                        row.x + row.width - LABEL_INSET - AdinControls.TOGGLE_WIDTH,
+                        centreY - AdinControls.TOGGLE_HEIGHT / 2.0F,
+                        AdinControls.TOGGLE_WIDTH, AdinControls.TOGGLE_HEIGHT,
+                        property.getValue(), fadedAccent);
+                break;
+            }
+            case SETTING_SLIDER: {
+                AdinControls.drawSlider(row.property, controlX, y, controlWidth, row.height,
+                        fractionOf(row.property), row.property.getValuePrompt(), this.valueColumn,
+                        fadedAccent, font, this.dragging == row.property);
+                break;
+            }
+            case SETTING_MODE: {
+                ModeProperty property = (ModeProperty) row.property;
+                AdinControls.drawSegmented(property, controlX, centreY - CONTROL_HEIGHT / 2.0F,
+                        controlWidth, CONTROL_HEIGHT, property.getModes(), property.getValue(), font);
+                break;
+            }
+            case SETTING_COLOR: {
+                this.drawColorControl(row, controlX, controlWidth, centreY, reveal);
+                break;
+            }
+            case KEYBIND: {
+                boolean listening = this.binding == row.module;
+                String value = listening ? "..." : KeyBindUtil.getKeyName(row.module.getKey());
+                AdinControls.drawField(row.x + row.width - LABEL_INSET - BIND_WIDTH,
+                        centreY - BIND_HEIGHT / 2.0F, BIND_WIDTH, BIND_HEIGHT, value,
+                        listening ? fadedAccent : labelColor, font);
+                break;
+            }
+            case SETTING_TEXT:
+            default: {
+                String value = AdinControls.fit(String.valueOf(row.property.getValuePrompt()), controlWidth, font);
+                AdinControls.drawText(font, value,
+                        row.x + row.width - LABEL_INSET - AdinControls.width(font, value),
+                        centreY - AdinControls.height(font) * 0.5F, mutedColor);
+                break;
             }
         }
-        RenderUtil.releaseScissor();
     }
 
-    private void drawModuleRow(Row row, int accent, boolean hovered) {
-        boolean open = this.expanded.contains(row.module);
-        int background = AdinTheme.lerp(AdinTheme.ROW, AdinTheme.CONTROL, hovered ? 0.45F : 0.0F);
-        RoundedUtils.drawRound(row.x, row.y, row.width, row.height, ROW_RADIUS,
-                AdinTheme.color(open ? AdinTheme.CONTROL : background));
-
-        FontRenderer font = FontManager.productSans16;
-        String name = row.module.getName();
-        float textY = row.y + (row.height - height(font)) / 2.0F;
-        draw(font, name, row.x + 9, textY, row.module.isEnabled() ? AdinTheme.TEXT : AdinTheme.MUTED);
-
-        String suffix = suffixOf(row.module);
-        if (suffix != null) {
-            draw(font, suffix, row.x + 9 + width(font, name) + 5, textY, AdinTheme.MUTED);
-        }
-
-        this.drawToggle(row.x + row.width - TOGGLE_WIDTH - 9,
-                row.y + (row.height - TOGGLE_HEIGHT) / 2,
-                TOGGLE_WIDTH, TOGGLE_HEIGHT, row.module.isEnabled(), accent);
-    }
-
-    private void drawBooleanRow(Row row, int accent) {
-        FontRenderer font = FontManager.productSans16;
-        BooleanProperty property = (BooleanProperty) row.property;
-        draw(font, property.getName(), row.x + 6, row.y + (row.height - height(font)) / 2.0F,
-                property.getValue() ? AdinTheme.TEXT : AdinTheme.MUTED);
-        this.drawToggle(row.x + row.width - SMALL_TOGGLE_WIDTH - 6,
-                row.y + (row.height - SMALL_TOGGLE_HEIGHT) / 2,
-                SMALL_TOGGLE_WIDTH, SMALL_TOGGLE_HEIGHT, property.getValue(), accent);
-    }
-
-    private void drawSliderRow(Row row, int accent, boolean hovered) {
-        FontRenderer font = FontManager.productSans16;
-        float textY = row.y + 3.0F;
-        draw(font, row.property.getName(), row.x + 6, textY, AdinTheme.TEXT);
-        String value = row.property.getValuePrompt();
-        draw(font, value, row.x + row.width - 6 - width(font, value), textY, AdinTheme.MUTED);
-
-        int trackX = row.x + 6;
-        int trackWidth = row.width - 12;
-        int trackY = row.y + row.height - TRACK_HEIGHT - 5;
-        RoundedUtils.drawRound(trackX, trackY, trackWidth, TRACK_HEIGHT, TRACK_HEIGHT / 2.0F,
-                AdinTheme.color(AdinTheme.TRACK));
-        float fraction = fractionOf(row.property);
-        float filled = Math.max(TRACK_HEIGHT, trackWidth * fraction);
-        RoundedUtils.drawRound(trackX, trackY, filled, TRACK_HEIGHT, TRACK_HEIGHT / 2.0F,
-                AdinTheme.color(accent));
-
-        boolean active = this.dragging == row.property;
-        if (hovered || active) {
-            float knob = trackX + trackWidth * fraction;
-            RoundedUtils.drawRound(knob - 3.0F, trackY - 2.0F, 6.0F, TRACK_HEIGHT + 4.0F, 3.0F,
-                    AdinTheme.color(active ? AdinTheme.TEXT : accent));
-        }
-    }
-
-    private void drawModeRow(Row row, int accent, boolean hovered) {
-        FontRenderer font = FontManager.productSans16;
-        ModeProperty property = (ModeProperty) row.property;
-        float textY = row.y + (row.height - height(font)) / 2.0F;
-        draw(font, property.getName(), row.x + 6, textY, AdinTheme.TEXT);
-        String value = property.getModeString();
-        draw(font, value, row.x + row.width - 6 - width(font, value), textY,
-                hovered ? accent : AdinTheme.DIM);
-    }
-
-    private void drawColorRow(Row row, boolean hovered) {
-        FontRenderer font = FontManager.productSans16;
+    /** A hue strip with a swatch: one drag covers every hue at full saturation. */
+    private void drawColorControl(Row row, float controlX, float controlWidth, float centreY, float reveal) {
         ColorProperty property = (ColorProperty) row.property;
-        draw(font, property.getName(), row.x + 6, row.y + 3.0F, AdinTheme.TEXT);
-
         int rgb = property.getValue() == null ? 0 : property.getValue();
-        RoundedUtils.drawRound(row.x + row.width - 20, row.y + 2, 14, 9, 3.0F,
-                AdinTheme.color(0xFF000000 | (rgb & 0xFFFFFF)));
+        float trackWidth = colorTrackWidth(controlWidth);
 
-        // A hue strip rather than a full picker: one drag covers every hue at full saturation.
-        int trackX = row.x + 6;
-        int trackWidth = row.width - 12;
-        int trackY = row.y + row.height - TRACK_HEIGHT - 5;
-        int steps = Math.max(1, trackWidth / 2);
-        float stepWidth = trackWidth / (float) steps;
+        int steps = Math.max(1, (int) (trackWidth / 2.0F));
+        float stepWidth = trackWidth / steps;
+        float trackY = centreY - AdinControls.TRACK_HEIGHT * 0.5F;
         for (int i = 0; i < steps; i++) {
-            int hueColor = Color.HSBtoRGB(i / (float) steps, 0.85F, 1.0F);
-            RenderUtil.drawRect(trackX + i * stepWidth, trackY, trackX + (i + 1) * stepWidth + 0.5F,
-                    trackY + TRACK_HEIGHT, 0xFF000000 | (hueColor & 0xFFFFFF));
+            int hue = Color.HSBtoRGB(i / (float) steps, 0.85F, 1.0F);
+            RoundedUtils.drawRound(controlX + i * stepWidth, trackY, stepWidth + 0.5F,
+                    AdinControls.TRACK_HEIGHT, 0.0F,
+                    AdinTheme.color(AdinTheme.alpha(0xFF000000 | (hue & 0xFFFFFF), reveal)));
         }
-        if (hovered) {
-            float[] hsb = Color.RGBtoHSB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, null);
-            float knob = trackX + trackWidth * hsb[0];
-            RoundedUtils.drawRound(knob - 2.0F, trackY - 2.0F, 4.0F, TRACK_HEIGHT + 4.0F, 2.0F,
-                    AdinTheme.color(AdinTheme.TEXT));
-        }
+
+        float[] hsb = Color.RGBtoHSB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, null);
+        float knobX = controlX + (trackWidth - AdinControls.KNOB_WIDTH) * hsb[0];
+        RoundedUtils.drawRound(knobX, centreY - AdinControls.KNOB_HEIGHT * 0.5F,
+                AdinControls.KNOB_WIDTH, AdinControls.KNOB_HEIGHT, 2.0F,
+                AdinTheme.color(AdinTheme.alpha(0xFF000000 | (rgb & 0xFFFFFF), reveal)));
+
+        RoundedUtils.drawRound(row.x + row.width - LABEL_INSET - 16.0F, centreY - 5.0F, 16.0F, 10.0F,
+                3.0F, AdinTheme.color(AdinTheme.alpha(0xFF000000 | (rgb & 0xFFFFFF), reveal)));
     }
 
-    private void drawTextRow(Row row) {
-        FontRenderer font = FontManager.productSans16;
-        float textY = row.y + (row.height - height(font)) / 2.0F;
-        draw(font, row.property.getName(), row.x + 6, textY, AdinTheme.MUTED);
-        String value = String.valueOf(row.property.getValuePrompt());
-        draw(font, value, row.x + row.width - 6 - width(font, value), textY, AdinTheme.DIM);
+    private static float colorTrackWidth(float controlWidth) {
+        return Math.max(10.0F, controlWidth - 22.0F);
     }
 
-    private void drawKeybindRow(Row row, int accent, boolean hovered) {
-        FontRenderer font = FontManager.productSans16;
-        float textY = row.y + (row.height - height(font)) / 2.0F;
-        draw(font, "Bind", row.x + 6, textY, AdinTheme.TEXT);
-        boolean listening = this.binding == row.module;
-        String value = listening ? "..." : KeyBindUtil.getKeyName(row.module.getKey());
-        draw(font, value, row.x + row.width - 6 - width(font, value), textY,
-                listening || hovered ? accent : AdinTheme.DIM);
-    }
-
-    private void drawToggle(int x, int y, int width, int height, boolean on, int accent) {
-        float radius = height / 2.0F;
-        if (on) {
-            RoundedUtils.drawRound(x, y, width, height, radius, AdinTheme.color(accent));
-        } else {
-            RoundedUtils.drawRoundOutline(x, y, width, height, radius, 1.0F,
-                    AdinTheme.color(AdinTheme.TOGGLE_OFF), AdinTheme.color(AdinTheme.TOGGLE_OFF_BORDER));
+    /** Wraps a description onto at most {@link #DESCRIPTION_LINES} lines. */
+    private static String[] wrap(String text, float available, FontRenderer font) {
+        if (text == null || text.isEmpty() || available <= 0.0F) {
+            return new String[0];
         }
-        float knob = height - 4.0F;
-        float knobX = on ? x + width - knob - 2.0F : x + 2.0F;
-        RoundedUtils.drawRound(knobX, y + 2.0F, knob, knob, knob / 2.0F,
-                AdinTheme.color(on ? AdinTheme.ON_ACCENT : AdinTheme.THUMB_OFF));
+        List<String> lines = new ArrayList<String>();
+        StringBuilder line = new StringBuilder();
+        for (String word : text.split(" ")) {
+            String candidate = line.length() == 0 ? word : line + " " + word;
+            if (AdinControls.width(font, candidate) <= available || line.length() == 0) {
+                line.setLength(0);
+                line.append(candidate);
+            } else {
+                lines.add(line.toString());
+                line.setLength(0);
+                line.append(word);
+                if (lines.size() == DESCRIPTION_LINES) {
+                    break;
+                }
+            }
+        }
+        if (lines.size() < DESCRIPTION_LINES && line.length() > 0) {
+            lines.add(line.toString());
+        }
+        while (lines.size() > DESCRIPTION_LINES) {
+            lines.remove(lines.size() - 1);
+        }
+        if (!lines.isEmpty()) {
+            int last = lines.size() - 1;
+            lines.set(last, AdinControls.fit(lines.get(last), available, font));
+        }
+        return lines.toArray(new String[0]);
     }
 
     // ---------------------------------------------------------------- input
 
     private boolean inViewport(int mouseY) {
-        return mouseY >= this.contentY() && mouseY < this.panelY + this.panelHeight;
+        return mouseY >= this.contentY() && mouseY < this.contentBottom();
     }
 
     @Override
@@ -500,7 +629,6 @@ public class AdinClickGui extends GuiScreen {
         this.rebuild();
 
         if (this.binding != null) {
-            // Any bindable button becomes the bind; left click just cancels.
             if (KeyBindUtil.isBindableMouseButton(button)) {
                 this.binding.setKey(KeyBindUtil.mouseButtonToKey(button));
             }
@@ -512,7 +640,16 @@ public class AdinClickGui extends GuiScreen {
             return;
         }
 
-        if (this.inViewport(mouseY) && this.clickContent(mouseX, mouseY, button)) {
+        if (this.openModule != null) {
+            float backX = this.overlayX() + OVERLAY_PADDING;
+            if (mouseX >= backX - 2 && mouseX < backX + 14
+                    && mouseY >= this.overlayY() && mouseY < this.overlayY() + OVERLAY_HEADER) {
+                this.closeOverlay();
+                return;
+            }
+        }
+
+        if (this.inViewport(mouseY) && this.clickRows(mouseX, mouseY, button)) {
             return;
         }
 
@@ -526,14 +663,15 @@ public class AdinClickGui extends GuiScreen {
 
     private boolean clickSidebar(int mouseX, int mouseY) {
         ModuleCategories.Category[] categories = ModuleCategories.Category.values();
-        int tabX = this.panelX + SIDEBAR_INSET;
-        int tabWidth = SIDEBAR_WIDTH - SIDEBAR_INSET * 2;
-        int firstY = this.contentY() + PADDING;
+        float tabX = this.panelX + SIDEBAR_INSET;
+        float tabWidth = SIDEBAR_WIDTH - SIDEBAR_INSET * 2;
+        float firstY = this.contentY() + PADDING;
         for (int i = 0; i < categories.length; i++) {
-            int tabY = firstY + i * TAB_STRIDE;
+            float tabY = firstY + i * TAB_STRIDE;
             if (mouseX >= tabX && mouseX < tabX + tabWidth && mouseY >= tabY && mouseY < tabY + TAB_HEIGHT) {
                 if (this.selected != categories[i]) {
                     this.selected = categories[i];
+                    this.openModule = null;
                     this.scroll = 0.0F;
                     this.targetScroll = 0.0F;
                 }
@@ -543,7 +681,7 @@ public class AdinClickGui extends GuiScreen {
         return false;
     }
 
-    private boolean clickContent(int mouseX, int mouseY, int button) {
+    private boolean clickRows(int mouseX, int mouseY, int button) {
         for (int i = 0; i < this.rows.size(); i++) {
             Row row = this.rows.get(i);
             if (!row.contains(mouseX, mouseY)) {
@@ -551,14 +689,14 @@ public class AdinClickGui extends GuiScreen {
             }
             switch (row.kind) {
                 case MODULE: {
-                    int toggleX = row.x + row.width - TOGGLE_WIDTH - 9;
-                    if (button == 0 && mouseX >= toggleX && mouseX < toggleX + TOGGLE_WIDTH) {
+                    float gear = gearX(row);
+                    if (mouseX >= toggleX(row)) {
                         row.module.toggle();
-                    } else if (button == 0) {
-                        if (!this.expanded.remove(row.module)) {
-                            this.expanded.add(row.module);
-                        }
+                    } else if (mouseX >= gear && mouseX < gear + GEAR_SIZE) {
+                        this.openOverlay(row.module);
                     } else if (button == 1) {
+                        this.openOverlay(row.module);
+                    } else {
                         row.module.toggle();
                     }
                     return true;
@@ -569,24 +707,28 @@ public class AdinClickGui extends GuiScreen {
                     row.module.verifyValue(property.getName());
                     return true;
                 }
-                case SETTING_SLIDER: {
+                case SETTING_SLIDER:
+                case SETTING_COLOR: {
                     this.dragging = row.property;
                     this.applyDrag(mouseX);
                     return true;
                 }
                 case SETTING_MODE: {
                     ModeProperty property = (ModeProperty) row.property;
-                    int count = property.getModes().length;
-                    if (count > 0) {
-                        int step = button == 1 ? count - 1 : 1;
-                        property.setValue((property.getValue() + step) % count);
+                    String[] modes = property.getModes();
+                    if (modes.length > 0) {
+                        float controlX = controlX(row);
+                        float controlWidth = controlWidth(row);
+                        int picked;
+                        if (mouseX >= controlX && mouseX < controlX + controlWidth) {
+                            picked = (int) ((mouseX - controlX) / (controlWidth / modes.length));
+                            picked = Math.max(0, Math.min(modes.length - 1, picked));
+                        } else {
+                            picked = (property.getValue() + (button == 1 ? modes.length - 1 : 1)) % modes.length;
+                        }
+                        property.setValue(picked);
                         row.module.verifyValue(property.getName());
                     }
-                    return true;
-                }
-                case SETTING_COLOR: {
-                    this.dragging = row.property;
-                    this.applyDrag(mouseX);
                     return true;
                 }
                 case KEYBIND: {
@@ -600,13 +742,27 @@ public class AdinClickGui extends GuiScreen {
         return false;
     }
 
+    private void openOverlay(Module module) {
+        this.openModule = module;
+        this.overlayOpenedAt = System.currentTimeMillis();
+        this.scroll = 0.0F;
+        this.targetScroll = 0.0F;
+    }
+
+    private void closeOverlay() {
+        this.openModule = null;
+        this.dragging = null;
+        this.binding = null;
+        this.scroll = 0.0F;
+        this.targetScroll = 0.0F;
+    }
+
     @Override
     protected void mouseReleased(int mouseX, int mouseY, int state) {
         this.dragging = null;
         super.mouseReleased(mouseX, mouseY, state);
     }
 
-    /** Maps the cursor onto the row the drag started on, so the pointer cannot slip to another. */
     private void applyDrag(int mouseX) {
         Row row = null;
         for (int i = 0; i < this.rows.size(); i++) {
@@ -619,14 +775,15 @@ public class AdinClickGui extends GuiScreen {
             this.dragging = null;
             return;
         }
-        int trackX = row.x + 6;
-        int trackWidth = Math.max(1, row.width - 12);
-        float fraction = Math.max(0.0F, Math.min(1.0F, (mouseX - trackX) / (float) trackWidth));
+        float controlX = controlX(row);
+        float controlWidth = controlWidth(row);
 
         if (row.kind == RowKind.SETTING_COLOR) {
-            ColorProperty property = (ColorProperty) row.property;
-            property.setValue(Color.HSBtoRGB(fraction, 0.85F, 1.0F) & 0xFFFFFF);
+            float trackWidth = colorTrackWidth(controlWidth);
+            float fraction = Math.max(0.0F, Math.min(1.0F, (mouseX - controlX) / trackWidth));
+            ((ColorProperty) row.property).setValue(Color.HSBtoRGB(fraction, 0.85F, 1.0F) & 0xFFFFFF);
         } else {
+            float fraction = AdinControls.sliderFraction(mouseX, controlX, controlWidth, this.valueColumn);
             setFraction(row.property, fraction);
         }
         row.module.verifyValue(row.property.getName());
@@ -639,10 +796,10 @@ public class AdinClickGui extends GuiScreen {
         if (wheel == 0) {
             return;
         }
-        // Mouse input can reach a freshly opened screen before its first frame, so the panel and
-        // content extents have to be measured here rather than assumed from the last draw.
+        // Mouse input can reach a freshly opened screen before its first frame, so the extents
+        // have to be measured here rather than assumed from the last draw.
         this.rebuild();
-        int overflow = this.contentHeight - this.viewportHeight();
+        int overflow = this.contentExtent - this.viewportHeight();
         if (overflow <= 0) {
             this.targetScroll = 0.0F;
             return;
@@ -651,11 +808,13 @@ public class AdinClickGui extends GuiScreen {
         this.targetScroll = Math.max(0.0F, Math.min(overflow, this.targetScroll));
     }
 
-    private void updateScroll() {
-        int overflow = Math.max(0, this.contentHeight - this.viewportHeight());
+    /** Frame-rate independent, so scrolling feels the same at 60 and at 300 FPS. */
+    private void updateScroll(float delta) {
+        int overflow = Math.max(0, this.contentExtent - this.viewportHeight());
         this.targetScroll = Math.max(0.0F, Math.min(overflow, this.targetScroll));
-        this.scroll += (this.targetScroll - this.scroll) * 0.35F;
-        if (Math.abs(this.targetScroll - this.scroll) < 0.4F) {
+        float factor = 1.0F - (float) Math.exp(-SCROLL_SPEED * delta);
+        this.scroll += (this.targetScroll - this.scroll) * Math.max(0.0F, Math.min(1.0F, factor));
+        if (Math.abs(this.targetScroll - this.scroll) < 0.25F) {
             this.scroll = this.targetScroll;
         }
     }
@@ -665,6 +824,10 @@ public class AdinClickGui extends GuiScreen {
         if (this.binding != null) {
             this.binding.setKey(KeyBindUtil.isUnbindKey(keyCode) ? KeyBindUtil.NONE : keyCode);
             this.binding = null;
+            return;
+        }
+        if (keyCode == Keyboard.KEY_ESCAPE && this.openModule != null) {
+            this.closeOverlay();
             return;
         }
         ClickGUIModule module = clickGuiModule();
@@ -698,7 +861,27 @@ public class AdinClickGui extends GuiScreen {
 
     // ---------------------------------------------------------------- numeric properties
 
-    /** Where a numeric property sits between its bounds, 0 to 1. */
+    /** The widest value this slider can show, used to size the shared value column. */
+    private static String boundsText(Property<?> property) {
+        if (property instanceof FloatProperty) {
+            FloatProperty typed = (FloatProperty) property;
+            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+        }
+        if (property instanceof IntProperty) {
+            IntProperty typed = (IntProperty) property;
+            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+        }
+        if (property instanceof PercentProperty) {
+            PercentProperty typed = (PercentProperty) property;
+            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+        }
+        if (property instanceof LongProperty) {
+            LongProperty typed = (LongProperty) property;
+            return String.valueOf(Math.max(Math.abs(typed.getMinimum()), Math.abs(typed.getMaximum())));
+        }
+        return "000";
+    }
+
     private static float fractionOf(Property<?> property) {
         double value;
         double min;
@@ -738,7 +921,6 @@ public class AdinClickGui extends GuiScreen {
             FloatProperty typed = (FloatProperty) property;
             float min = typed.getMinimum();
             float max = typed.getMaximum();
-            // Two decimals: finer than that is not reachable with a mouse and looks like noise.
             typed.setValue(Math.round((min + (max - min) * fraction) * 100.0F) / 100.0F);
         } else if (property instanceof IntProperty) {
             IntProperty typed = (IntProperty) property;
@@ -756,41 +938,5 @@ public class AdinClickGui extends GuiScreen {
             long max = typed.getMaximum();
             typed.setValue(min + Math.round((max - min) * (double) fraction));
         }
-    }
-
-    private static String suffixOf(Module module) {
-        String[] suffix = module.getSuffix();
-        if (suffix == null || suffix.length == 0 || suffix[0] == null || suffix[0].isEmpty()) {
-            return null;
-        }
-        return suffix[0];
-    }
-
-    // ---------------------------------------------------------------- text
-
-    private void draw(FontRenderer font, String text, float x, float y, int color) {
-        if (text == null) {
-            return;
-        }
-        if (font != null) {
-            font.drawString(text, x, y, color);
-        } else {
-            this.mc.fontRendererObj.drawString(text, (int) x, (int) y, color);
-        }
-    }
-
-    private static float width(FontRenderer font, String text) {
-        if (text == null) {
-            return 0.0F;
-        }
-        return font != null
-                ? FontManager.getStringWidth(font, text)
-                : net.minecraft.client.Minecraft.getMinecraft().fontRendererObj.getStringWidth(text);
-    }
-
-    private static float height(FontRenderer font) {
-        return font != null
-                ? FontManager.getHeight(font)
-                : net.minecraft.client.Minecraft.getMinecraft().fontRendererObj.FONT_HEIGHT;
     }
 }

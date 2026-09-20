@@ -15,6 +15,14 @@ public final class AdinTransition {
     public static final Easing EASE_OUT_CUBIC = t -> 1.0F - (1.0F - t) * (1.0F - t) * (1.0F - t);
     public static final Easing EASE_OUT_EXPO = t -> t >= 1.0F ? 1.0F : 1.0F - (float) Math.pow(2.0, -10.0F * t);
     public static final Easing SMOOTHSTEP = t -> t * t * (3.0F - 2.0F * t);
+    /** Overshoots slightly and settles back, which is what gives the toggle thumb its snap. */
+    public static final Easing EASE_OUT_SETTLE = t -> back(t, 1.3F);
+    public static final Easing EASE_OUT_BACK = t -> back(t, 1.70158F);
+
+    private static float back(float t, float amount) {
+        float u = t - 1.0F;
+        return 1.0F + (amount + 1.0F) * u * u * u + amount * u * u;
+    }
 
     private final long durationNanos;
     private final Easing easing;

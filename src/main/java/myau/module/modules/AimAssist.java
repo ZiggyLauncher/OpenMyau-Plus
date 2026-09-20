@@ -55,28 +55,26 @@ public class AimAssist extends Module {
     private static final float TURN_FACTOR = 0.15F;
     /** Rotation priority for the silent path. KillAura uses 1, so it always wins over this. */
     private static final int ROTATION_PRIORITY = 0;
+    /** Fixed reach, as in the original - it is not a setting there and should not be one here. */
+    private static final double RANGE = 6.0;
 
+    // Setting order and names follow the original module exactly.
+    public final FloatProperty fov = new FloatProperty("fov", 80.0F, 10.0F, 360.0F);
     public final ModeProperty mode = new ModeProperty("mode", MODE_REGULAR, new String[]{"Regular", "Silent"});
     public final ModeProperty rotation = new ModeProperty("rotation", RotationConfig.EASE_OUT_CUBIC, RotationConfig.SMOOTHING);
     public final FloatProperty smoothness = new FloatProperty("smoothness", 50.0F, 0.0F, 100.0F);
-    public final FloatProperty fov = new FloatProperty("fov", 80.0F, 10.0F, 360.0F);
-    public final FloatProperty range = new FloatProperty("range", 6.0F, 1.0F, 8.0F);
+    public final BooleanProperty onHold = new BooleanProperty("onHold", false);
+    public final BooleanProperty weaponsOnly = new BooleanProperty("weaponsOnly", false);
     public final ModeProperty priority = new ModeProperty("target", PRIORITY_CLOSEST, new String[]{"Closest to FOV", "Lowest health"});
-    public final BooleanProperty onHold = new BooleanProperty("on-hold", false);
-    public final BooleanProperty weaponsOnly = new BooleanProperty("weapons-only", false);
-
-    public final BooleanProperty boneMultipoint = new BooleanProperty("bone-multipoint", false);
-    public final BooleanProperty boneHead = new BooleanProperty("bone-head", true);
-    public final BooleanProperty boneBody = new BooleanProperty("bone-body", false);
-    public final BooleanProperty boneArms = new BooleanProperty("bone-arms", false);
-    public final BooleanProperty boneLegs = new BooleanProperty("bone-legs", false);
-
-    public final BooleanProperty players = new BooleanProperty("players", true);
-    public final BooleanProperty mobs = new BooleanProperty("mobs", false);
-    public final BooleanProperty invisibles = new BooleanProperty("invisibles", false);
+    public final BooleanProperty playersOnly = new BooleanProperty("players only", true);
     public final BooleanProperty teams = new BooleanProperty("teams", true);
     public final BooleanProperty botCheck = new BooleanProperty("bot-check", true);
-    public final BooleanProperty yieldToKillAura = new BooleanProperty("yield-to-killaura", true);
+
+    public final BooleanProperty boneMultipoint = new BooleanProperty("multipoint", false);
+    public final BooleanProperty boneHead = new BooleanProperty("head", true);
+    public final BooleanProperty boneBody = new BooleanProperty("body", false);
+    public final BooleanProperty boneArms = new BooleanProperty("arms", false);
+    public final BooleanProperty boneLegs = new BooleanProperty("legs", false);
 
     /** The target chosen this tick, and the bone on it being aimed at. */
     private EntityLivingBase current;
@@ -101,6 +99,7 @@ public class AimAssist extends Module {
     public void onDisabled() {
         this.reset();
         this.silent = null;
+        reported = null;
     }
 
     private void reset() {
@@ -111,9 +110,41 @@ public class AimAssist extends Module {
         this.lastFrameNanos = 0L;
     }
 
+    /**
+     * The rotation the server currently believes we are looking along, or null in Regular mode.
+     * Read from the render thread by the pick redirect, written on the client thread.
+     */
+    private static volatile Rotation reported;
+
     /** The entity being assisted onto, for other modules and the HUD. Null when idle. */
     public EntityLivingBase getTarget() {
         return this.isEnabled() ? this.current : null;
+    }
+
+    /**
+     * The look vector the client's own hit detection should use for {@code entity}, or null to
+     * leave it alone.
+     * <p>
+     * Without this, silent mode changes only the rotation in the outgoing packet: the server sees
+     * the aim, but {@code EntityRenderer.getMouseOver} still traces along the real view, so there
+     * is never anything under the crosshair to attack. Pointing the pick down the same ray is
+     * what makes the mode do anything at all.
+     */
+    public static Vec3 silentLook(Entity entity) {
+        Rotation rotation = reported;
+        if (rotation == null || entity == null || entity != mc.thePlayer) {
+            return null;
+        }
+        return direction(rotation);
+    }
+
+    /** Same construction as {@code Entity.getVectorForRotation}, so the ray matches vanilla's. */
+    private static Vec3 direction(Rotation rotation) {
+        float yawCos = MathHelper.cos(-rotation.yaw * 0.017453292F - (float) Math.PI);
+        float yawSin = MathHelper.sin(-rotation.yaw * 0.017453292F - (float) Math.PI);
+        float pitchCos = -MathHelper.cos(-rotation.pitch * 0.017453292F);
+        float pitchSin = MathHelper.sin(-rotation.pitch * 0.017453292F);
+        return new Vec3(yawSin * pitchCos, pitchSin, yawCos * pitchCos);
     }
 
     private RotationConfig config() {
@@ -167,7 +198,9 @@ public class AimAssist extends Module {
         if (this.weaponsOnly.getValue() && !ItemUtil.hasRawUnbreakingEnchant() && !ItemUtil.isHoldingTool()) {
             return false;
         }
-        return !this.yieldToKillAura.getValue() || !this.killAuraBusy();
+        // Not a setting: two aim systems pulling the view at once is a bug, not a choice, so
+        // KillAura always wins while it holds a target.
+        return !this.killAuraBusy();
     }
 
     /** KillAura owns the rotation while it has a target; two modules aiming at once looks wrong. */
@@ -191,14 +224,10 @@ public class AimAssist extends Module {
         }
         // Distance first: it is a subtraction, while the team, bot and line-of-sight checks below
         // are string work and a ray trace. In a full lobby that ordering is the whole cost.
-        double reach = this.range.getValue();
-        if (player.getDistanceSqToEntity(entity) > reach * reach) {
+        if (player.getDistanceSqToEntity(entity) > RANGE * RANGE) {
             return false;
         }
         if (entity instanceof EntityPlayer) {
-            if (!this.players.getValue()) {
-                return false;
-            }
             EntityPlayer target = (EntityPlayer) entity;
             if (TeamUtil.isFriend(target)) {
                 return false;
@@ -209,10 +238,7 @@ public class AimAssist extends Module {
             if (this.botCheck.getValue() && TeamUtil.isBot(target)) {
                 return false;
             }
-        } else if (!this.mobs.getValue()) {
-            return false;
-        }
-        if (!this.invisibles.getValue() && entity.isInvisible()) {
+        } else if (this.playersOnly.getValue()) {
             return false;
         }
         return player.canEntityBeSeen(entity);
@@ -296,6 +322,7 @@ public class AimAssist extends Module {
         if (this.mode.getValue() != MODE_SILENT) {
             // Regular mode turns the view itself, once per frame, in onRender3D.
             this.silent = null;
+            reported = null;
             return;
         }
 
@@ -303,6 +330,7 @@ public class AimAssist extends Module {
         Rotation from = this.silent != null ? this.silent : actual;
         Rotation stepped = this.rotator().step(from, this.aimAt(1.0F), this.config(), 1.0F);
         this.silent = quantize(stepped, event.getYaw(), event.getPitch());
+        reported = this.silent;
         event.setRotation(this.silent.yaw, this.silent.pitch, ROTATION_PRIORITY);
     }
 
@@ -313,6 +341,7 @@ public class AimAssist extends Module {
     private void decaySilent(UpdateEvent event) {
         if (this.silent == null || mc.thePlayer == null) {
             this.silent = null;
+            reported = null;
             this.rotator = null;
             return;
         }
@@ -321,10 +350,12 @@ public class AimAssist extends Module {
         Rotation next = quantize(stepped, event.getYaw(), event.getPitch());
         if (next.distanceTo(actual) < (float) RotationUtil.gcd()) {
             this.silent = null;
+            reported = null;
             this.rotator = null;
             return;
         }
         this.silent = next;
+        reported = next;
         event.setRotation(next.yaw, next.pitch, ROTATION_PRIORITY);
     }
 

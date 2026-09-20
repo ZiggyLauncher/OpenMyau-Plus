@@ -17,6 +17,7 @@ import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.item.ItemStack;
 import net.minecraft.potion.Potion;
 import net.minecraft.util.MathHelper;
+import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
@@ -153,6 +154,49 @@ public abstract class MixinEntityRenderer {
             NoHurtCam noHurtCam = (NoHurtCam) Myau.moduleManager.modules.get(NoHurtCam.class);
             return noHurtCam.isEnabled() ? float1 * (float) noHurtCam.multiplier.getValue().intValue() / 100.0F : float1;
         }
+    }
+
+    /**
+     * Points the client's own entity pick down the rotation a silent aim is reporting.
+     * <p>
+     * Changing only the outgoing packet is not enough: the server would see the aim while
+     * {@code getMouseOver} still traced along the real view, so nothing would ever be under the
+     * crosshair to attack.
+     */
+    @Redirect(
+            method = {"getMouseOver"},
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/entity/Entity;getLook(F)Lnet/minecraft/util/Vec3;"
+            )
+    )
+    private Vec3 myau$pickAlongSilentRotation(Entity entity, float partialTicks) {
+        Vec3 silent = AimAssist.silentLook(entity);
+        return silent != null ? silent : entity.getLook(partialTicks);
+    }
+
+    /**
+     * Sends the block ray trace down the same rotation as the entity scan above.
+     * <p>
+     * {@code getMouseOver} clamps the entity search to whatever the block trace hit, so leaving
+     * this one on the real view would let a wall in front of your face veto a hit the silent aim
+     * had a clear line to. Same construction as {@code Entity.rayTrace}, with the look swapped.
+     */
+    @Redirect(
+            method = {"getMouseOver"},
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/entity/Entity;rayTrace(DF)Lnet/minecraft/util/MovingObjectPosition;"
+            )
+    )
+    private MovingObjectPosition myau$traceAlongSilentRotation(Entity entity, double distance, float partialTicks) {
+        Vec3 silent = AimAssist.silentLook(entity);
+        if (silent == null) {
+            return entity.rayTrace(distance, partialTicks);
+        }
+        Vec3 eye = entity.getPositionEyes(partialTicks);
+        Vec3 end = eye.addVector(silent.xCoord * distance, silent.yCoord * distance, silent.zCoord * distance);
+        return entity.worldObj.rayTraceBlocks(eye, end, false, false, true);
     }
 
     @ModifyConstant(

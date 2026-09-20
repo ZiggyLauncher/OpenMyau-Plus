@@ -13,7 +13,6 @@ import myau.events.TickEvent;
 import myau.mixin.IAccessorRenderManager;
 import myau.module.Module;
 import myau.property.properties.BooleanProperty;
-import myau.property.properties.FloatProperty;
 import myau.property.properties.IntProperty;
 import myau.property.properties.ModeProperty;
 import myau.util.RenderUtil;
@@ -68,15 +67,20 @@ public class BackTrack extends Module {
      */
     private static final int MAX_HELD_PACKETS = 2000;
     private static final long MAX_HOLD_MILLIS = 10000L;
+    /**
+     * Vanilla entity interaction range. Not a setting in the original either - the hold is only
+     * worth taking while the target is inside the reach the server will actually accept.
+     */
+    private static final double RANGE = 3.0;
 
+    // Setting order and names follow the original module exactly, apart from the last one.
     public final ModeProperty mode = new ModeProperty("mode", MODE_DELAY, new String[]{"Delay", "Freeze"});
     public final IntProperty delay = new IntProperty("delay", 120, 0, 1000, () -> this.mode.getValue() != MODE_FREEZE);
-    public final FloatProperty range = new FloatProperty("range", 3.5F, 1.0F, 8.0F);
-    public final BooleanProperty pauseOnHurt = new BooleanProperty("pause-on-hurt", false, () -> this.mode.getValue() != MODE_FREEZE);
-    public final ModeProperty visualize = new ModeProperty("visualize", VISUALIZE_BOX, new String[]{"Off", "Box", "Both"});
-    public final BooleanProperty players = new BooleanProperty("players", true);
+    public final BooleanProperty pauseOnHurt = new BooleanProperty("pauseOnHurt", false, () -> this.mode.getValue() != MODE_FREEZE);
     public final BooleanProperty teams = new BooleanProperty("teams", true);
     public final BooleanProperty botCheck = new BooleanProperty("bot-check", true);
+    public final ModeProperty visualize = new ModeProperty("visualize", VISUALIZE_BOX, new String[]{"Off", "Box", "Both"});
+    /** Not in the original: this client has its own packet-delaying module to stay clear of. */
     public final BooleanProperty interruptLagRange = new BooleanProperty("interrupt-lagrange", true);
 
     private final TrackedPosition tracked = new TrackedPosition();
@@ -336,9 +340,6 @@ public class BackTrack extends Module {
         if (!(entity instanceof EntityPlayer)) {
             return false;
         }
-        if (!this.players.getValue()) {
-            return false;
-        }
         EntityPlayer player = (EntityPlayer) entity;
         if (TeamUtil.isFriend(player)) {
             return false;
@@ -350,8 +351,7 @@ public class BackTrack extends Module {
     }
 
     private boolean reachable(EntityLivingBase entity) {
-        double reach = this.range.getValue();
-        return boxedDistanceSqr(entity, entityPosition(entity), eyePosition()) <= reach * reach;
+        return boxedDistanceSqr(entity, entityPosition(entity), eyePosition()) <= RANGE * RANGE;
     }
 
     /** True when the real position is nearer to you than the one currently drawn. */

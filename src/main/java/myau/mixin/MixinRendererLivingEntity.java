@@ -4,7 +4,6 @@ import myau.Myau;
 import myau.event.EventManager;
 import myau.event.types.EventType;
 import myau.events.RenderLivingEvent;
-import myau.module.modules.ESP;
 import myau.module.modules.NameTags;
 import net.minecraft.client.renderer.entity.Render;
 import net.minecraft.client.renderer.entity.RenderManager;
@@ -50,15 +49,13 @@ public abstract class MixinRendererLivingEntity<T extends EntityLivingBase> exte
             cancellable = true
     )
     private void canRenderName(T entityLivingBase, CallbackInfoReturnable<Boolean> callbackInfoReturnable) {
+        // ESP used to suppress vanilla nameplates here, because its old outline mode drove the
+        // glow framebuffer and the plates fought it. The box ESP does not touch that pipeline, so
+        // the plates are left alone and only NameTags decides.
         if (Myau.moduleManager != null) {
             NameTags nameTags = (NameTags) Myau.moduleManager.modules.get(NameTags.class);
             if (nameTags.isEnabled() && nameTags.shouldRenderTags(entityLivingBase)) {
                 callbackInfoReturnable.setReturnValue(false);
-            } else {
-                ESP esp = (ESP) Myau.moduleManager.modules.get(ESP.class);
-                if (esp.isEnabled() && !esp.isOutlineEnabled()) {
-                    callbackInfoReturnable.setReturnValue(false);
-                }
             }
         }
     }
