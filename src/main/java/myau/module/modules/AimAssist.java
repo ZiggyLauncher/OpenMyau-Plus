@@ -14,7 +14,6 @@ import myau.rotation.Bone;
 import myau.rotation.Rotation;
 import myau.rotation.RotationConfig;
 import myau.rotation.Rotator;
-import myau.util.ItemUtil;
 import myau.util.MoveUtil;
 import myau.util.RotationUtil;
 import myau.util.TeamUtil;
@@ -23,6 +22,9 @@ import net.minecraft.client.entity.EntityPlayerSP;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.item.ItemAxe;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.ItemSword;
 import net.minecraft.util.MathHelper;
 import net.minecraft.util.Vec3;
 
@@ -76,15 +78,22 @@ public class AimAssist extends Module {
      */
     public final BooleanProperty moveFix = new BooleanProperty("move-fix", true,
             () -> this.mode.getValue() == MODE_SILENT);
-    public final BooleanProperty playersOnly = new BooleanProperty("players only", true);
-    public final BooleanProperty teams = new BooleanProperty("teams", true);
-    public final BooleanProperty botCheck = new BooleanProperty("bot-check", true);
+    // The original's TargetSettings group: Players, Invisible, Entities. It carries no team or
+    // bot filter, so neither does this; friends are excluded unconditionally, as there.
+    public final BooleanProperty players = new BooleanProperty("players", true);
+    public final BooleanProperty invisible = new BooleanProperty("invisible", false);
+    public final BooleanProperty entities = new BooleanProperty("entities", false);
 
+    /**
+     * Selecting multipoint hides the named bones, matching the original: multipoint already
+     * tracks whichever part of the hitbox is nearest the crosshair, so a fixed bone next to it
+     * would only ever pull the aim away from it.
+     */
     public final BooleanProperty boneMultipoint = new BooleanProperty("multipoint", false);
-    public final BooleanProperty boneHead = new BooleanProperty("head", true);
-    public final BooleanProperty boneBody = new BooleanProperty("body", false);
-    public final BooleanProperty boneArms = new BooleanProperty("arms", false);
-    public final BooleanProperty boneLegs = new BooleanProperty("legs", false);
+    public final BooleanProperty boneHead = new BooleanProperty("head", true, () -> !this.boneMultipoint.getValue());
+    public final BooleanProperty boneBody = new BooleanProperty("body", false, () -> !this.boneMultipoint.getValue());
+    public final BooleanProperty boneArms = new BooleanProperty("arms", false, () -> !this.boneMultipoint.getValue());
+    public final BooleanProperty boneLegs = new BooleanProperty("legs", false, () -> !this.boneMultipoint.getValue());
 
     /** The target chosen this tick, and the bone on it being aimed at. */
     private EntityLivingBase current;
@@ -194,23 +203,36 @@ public class AimAssist extends Module {
         }
     }
 
-    /** True while the client should be aiming at all: in a world, not in a menu, allowed to aim. */
+    /**
+     * The original's {@code Game.playing}: in a world, no screen open, and the mouse grabbed.
+     * {@code inGameHasFocus} is this version's mouse-grabbed flag. There is deliberately no check
+     * on your own health - the original has none either.
+     */
     private boolean canAim() {
-        if (mc.thePlayer == null || mc.theWorld == null || mc.currentScreen != null) {
-            return false;
-        }
-        if (mc.thePlayer.isDead || mc.thePlayer.getHealth() <= 0.0F) {
+        if (mc.thePlayer == null || mc.theWorld == null || mc.currentScreen != null || !mc.inGameHasFocus) {
             return false;
         }
         if (this.onHold.getValue() && !mc.gameSettings.keyBindAttack.isKeyDown()) {
             return false;
         }
-        if (this.weaponsOnly.getValue() && !ItemUtil.hasRawUnbreakingEnchant() && !ItemUtil.isHoldingTool()) {
+        if (this.weaponsOnly.getValue() && !holdsWeapon()) {
             return false;
         }
         // Not a setting: two aim systems pulling the view at once is a bug, not a choice, so
         // KillAura always wins while it holds a target.
         return !this.killAuraBusy();
+    }
+
+    /**
+     * The original tests for the item's weapon component, which on this version means the classes
+     * that carry an attack damage modifier by default: swords and axes.
+     */
+    private static boolean holdsWeapon() {
+        ItemStack held = mc.thePlayer.getHeldItem();
+        if (held == null || held.getItem() == null) {
+            return false;
+        }
+        return held.getItem() instanceof ItemSword || held.getItem() instanceof ItemAxe;
     }
 
     /** KillAura owns the rotation while it has a target; two modules aiming at once looks wrong. */
@@ -225,30 +247,37 @@ public class AimAssist extends Module {
         return ((KillAura) module).getTarget() != null;
     }
 
+    /**
+     * The original's {@code TargetSettings.accepts}, then its reach and line-of-sight checks.
+     * <p>
+     * Distance is tested before the rest because it is a subtraction while line of sight is a ray
+     * trace; in a full lobby that ordering is most of the cost.
+     */
     private boolean targeted(EntityPlayerSP player, EntityLivingBase entity) {
-        if (entity == player || entity == mc.getRenderViewEntity() || entity.isDead || entity.deathTime > 0) {
+        if (entity == player || entity == mc.getRenderViewEntity()) {
             return false;
         }
-        if (entity.getHealth() <= 0.0F) {
-            return false;
-        }
-        // Distance first: it is a subtraction, while the team, bot and line-of-sight checks below
-        // are string work and a ray trace. In a full lobby that ordering is the whole cost.
         if (player.getDistanceSqToEntity(entity) > RANGE * RANGE) {
             return false;
         }
+        if (!entity.isEntityAlive()) {
+            return false;
+        }
+        if (entity instanceof EntityPlayer && ((EntityPlayer) entity).isSpectator()) {
+            return false;
+        }
+        // Friends are protected unconditionally there, not behind a setting.
+        if (entity instanceof EntityPlayer && TeamUtil.isFriend((EntityPlayer) entity)) {
+            return false;
+        }
+        if (entity.isInvisible() && !this.invisible.getValue()) {
+            return false;
+        }
         if (entity instanceof EntityPlayer) {
-            EntityPlayer target = (EntityPlayer) entity;
-            if (TeamUtil.isFriend(target)) {
+            if (!this.players.getValue()) {
                 return false;
             }
-            if (this.teams.getValue() && TeamUtil.isSameTeam(target)) {
-                return false;
-            }
-            if (this.botCheck.getValue() && TeamUtil.isBot(target)) {
-                return false;
-            }
-        } else if (this.playersOnly.getValue()) {
+        } else if (!this.entities.getValue()) {
             return false;
         }
         return player.canEntityBeSeen(entity);

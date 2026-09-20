@@ -188,7 +188,16 @@ public class AdinClickGui extends GuiScreen {
         return this.panelY + this.panelHeight;
     }
 
+    /**
+     * How much of the current list is on screen, which is what the scroll limit is measured
+     * against. The settings overlay is inset inside the content area and has its own header, so
+     * measuring it as the full content height leaves the last rows - the bind row among them -
+     * permanently below the fold and unreachable.
+     */
     private int viewportHeight() {
+        if (this.openModule != null) {
+            return (int) (this.overlayY() + this.overlayHeight() - this.overlayListY() - OVERLAY_PADDING);
+        }
         return (int) (this.contentBottom() - this.contentY() - PADDING);
     }
 
