@@ -3,6 +3,7 @@ package myau.module.modules;
 import myau.Myau;
 import myau.event.EventTarget;
 import myau.event.types.EventType;
+import myau.event.types.Priority;
 import myau.events.MoveInputEvent;
 import myau.events.Render3DEvent;
 import myau.events.UpdateEvent;
@@ -103,6 +104,8 @@ public class AimAssist extends Module {
     private int rotatorKind = -1;
     /** Silent mode only: the rotation being reported, which decays back to the real one. */
     private Rotation silent;
+    /** Set while another module owns the rotation, so the per-frame visible turn stops too. */
+    private boolean yielded;
     private long lastFrameNanos;
 
     public AimAssist() {
@@ -127,6 +130,21 @@ public class AimAssist extends Module {
         this.rotator = null;
         this.rotatorKind = -1;
         this.lastFrameNanos = 0L;
+        this.yielded = false;
+    }
+
+    /**
+     * Gives the rotation up entirely for this tick: no target, nothing reported, and the visible
+     * turn skipped until the owning module is done. The silent rotation is dropped rather than
+     * decayed, because decaying would mean sending one, and the point is to send nothing.
+     */
+    private void standDown() {
+        this.current = null;
+        this.currentBone = null;
+        this.silent = null;
+        this.rotator = null;
+        reported = null;
+        this.yielded = true;
     }
 
     /**
@@ -248,6 +266,31 @@ public class AimAssist extends Module {
     }
 
     /**
+     * Modules that steer the rotation themselves for as long as they are on. This one stands
+     * down while any of them is engaged, rather than taking turns with them tick by tick.
+     * <p>
+     * The modules that only rotate in bursts - the flicks, AntiFireball - are not listed: they
+     * are already covered by this handler running at the lowest event priority and standing down
+     * whenever it finds the rotation has been claimed for the tick.
+     */
+    private static boolean foreignRotation() {
+        if (Myau.moduleManager == null) {
+            return false;
+        }
+        return enabled(Scaffold.class)
+                || enabled(ChestAura.class)
+                || enabled(BedNuker.class)
+                || enabled(AutoBlockIn.class)
+                || enabled(AutoBedDef.class)
+                || enabled(AutoHeadHitter.class);
+    }
+
+    private static boolean enabled(Class<? extends Module> type) {
+        Module module = Myau.moduleManager.modules.get(type);
+        return module != null && module.isEnabled();
+    }
+
+    /**
      * The original's {@code TargetSettings.accepts}, then its reach and line-of-sight checks.
      * <p>
      * Distance is tested before the rest because it is a subtraction while line of sight is a ray
@@ -340,11 +383,22 @@ public class AimAssist extends Module {
                 this.currentBone.point(mc.thePlayer, this.current, partialTicks));
     }
 
-    @EventTarget
+    /**
+     * Runs at the lowest event priority on purpose, so every module that steers the rotation has
+     * already had its say by the time this one looks. If the rotation is already claimed for the
+     * tick this module stands down - which is the same outcome the original reaches by requesting
+     * at priority zero and letting its rotation manager pick the highest bidder.
+     */
+    @EventTarget(Priority.LOWEST)
     public void onUpdate(UpdateEvent event) {
         if (event.getType() != EventType.PRE) {
             return;
         }
+        if (event.isRotated() || foreignRotation()) {
+            this.standDown();
+            return;
+        }
+        this.yielded = false;
         if (!this.canAim()) {
             this.current = null;
             this.currentBone = null;
@@ -394,7 +448,7 @@ public class AimAssist extends Module {
      */
     @EventTarget
     public void onMoveInput(MoveInputEvent event) {
-        if (this.mode.getValue() != MODE_SILENT || !this.moveFix.getValue()) {
+        if (this.yielded || this.mode.getValue() != MODE_SILENT || !this.moveFix.getValue()) {
             return;
         }
         Rotation current = this.silent;
@@ -447,7 +501,10 @@ public class AimAssist extends Module {
                 : Math.min(4.0F, Math.max(0.0F, (now - this.lastFrameNanos) / 1.0e9F * 20.0F));
         this.lastFrameNanos = now;
 
-        if (this.mode.getValue() == MODE_SILENT || this.current == null || this.currentBone == null) {
+        // The visible turn has to respect the stand-down too: it moves the view directly, outside
+        // the rotation arbitration, so it would otherwise fight whichever module took over.
+        if (this.yielded || this.mode.getValue() == MODE_SILENT
+                || this.current == null || this.currentBone == null) {
             return;
         }
         if (deltaTicks <= 0.0F || mc.thePlayer == null || mc.theWorld == null || mc.currentScreen != null) {
