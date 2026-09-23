@@ -5,7 +5,6 @@ import myau.event.EventTarget;
 import myau.event.types.EventType;
 import myau.event.types.Priority;
 import myau.events.MoveInputEvent;
-import myau.events.Render3DEvent;
 import myau.events.UpdateEvent;
 import myau.module.Module;
 import myau.property.properties.BooleanProperty;
@@ -467,8 +466,30 @@ public class AimAssist extends Module {
         this.reportMovementYaw(event, next.yaw);
     }
 
-    @EventTarget
-    public void onRender3D(Render3DEvent event) {
+    /**
+     * The visible turn, driven from the same point in the frame the original uses: immediately
+     * after the game has applied your own mouse movement, and before the camera for the frame is
+     * built.
+     * <p>
+     * This used to run during the world render instead, which is after the camera is already set
+     * up - so every correction only became visible on the following frame. At sixty frames a
+     * second that is sixteen milliseconds of latency on every nudge, and at thirty it is
+     * thirty-three; enough to feel like the assist is dragging behind the target rather than
+     * tracking it.
+     *
+     * @param partialTicks the frame's partial tick, for interpolating the aim point
+     */
+    public static void turn(float partialTicks) {
+        if (Myau.moduleManager == null) {
+            return;
+        }
+        Module module = Myau.moduleManager.modules.get(AimAssist.class);
+        if (module instanceof AimAssist && module.isEnabled()) {
+            ((AimAssist) module).applyTurn(partialTicks);
+        }
+    }
+
+    private void applyTurn(float partialTicks) {
         long now = System.nanoTime();
         float deltaTicks = this.lastFrameNanos == 0L ? 0.0F
                 : Math.min(4.0F, Math.max(0.0F, (now - this.lastFrameNanos) / 1.0e9F * 20.0F));
@@ -487,9 +508,9 @@ public class AimAssist extends Module {
             return;
         }
 
-        float partialTicks = Math.max(0.0F, Math.min(1.0F, event.getPartialTicks()));
+        float clamped = Math.max(0.0F, Math.min(1.0F, partialTicks));
         Rotation actual = Rotation.of(mc.thePlayer);
-        Rotation next = this.rotator().step(actual, this.aimAt(partialTicks), this.config(), deltaTicks);
+        Rotation next = this.rotator().step(actual, this.aimAt(clamped), this.config(), deltaTicks);
 
         float deltaYaw = actual.yawTo(next);
         float deltaPitch = actual.pitchTo(next);

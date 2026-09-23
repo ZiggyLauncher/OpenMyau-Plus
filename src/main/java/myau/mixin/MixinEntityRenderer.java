@@ -74,6 +74,27 @@ public abstract class MixinEntityRenderer {
         }
     }
 
+    /**
+     * Drives the aim assist's visible turn right after the game has applied the player's own
+     * mouse movement, which is where the original client turns.
+     * <p>
+     * There are two {@code setAngles} calls here, the smooth-camera branch and the plain one, and
+     * exactly one of them runs per frame - so injecting after both fires once either way. Doing
+     * this during the world render instead, as this used to, lands the turn after the camera for
+     * the frame is already built and costs a full frame of latency on every correction.
+     */
+    @Inject(
+            method = {"updateCameraAndRender"},
+            at = {@At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/entity/EntityPlayerSP;setAngles(FF)V",
+                    shift = At.Shift.AFTER
+            )}
+    )
+    private void myau$turnAfterMouse(float partialTicks, long nanoTime, CallbackInfo callbackInfo) {
+        AimAssist.turn(partialTicks);
+    }
+
     @Inject(
             method = {"updateCameraAndRender"},
             at = {@At("RETURN")}
