@@ -134,20 +134,6 @@ public class AimAssist extends Module {
     }
 
     /**
-     * Gives the rotation up entirely for this tick: no target, nothing reported, and the visible
-     * turn skipped until the owning module is done. The silent rotation is dropped rather than
-     * decayed, because decaying would mean sending one, and the point is to send nothing.
-     */
-    private void standDown() {
-        this.current = null;
-        this.currentBone = null;
-        this.silent = null;
-        this.rotator = null;
-        reported = null;
-        this.yielded = true;
-    }
-
-    /**
      * The rotation the server currently believes we are looking along, or null in Regular mode.
      * Read from the render thread by the pick redirect, written on the client thread.
      */
@@ -266,31 +252,6 @@ public class AimAssist extends Module {
     }
 
     /**
-     * Modules that steer the rotation themselves for as long as they are on. This one stands
-     * down while any of them is engaged, rather than taking turns with them tick by tick.
-     * <p>
-     * The modules that only rotate in bursts - the flicks, AntiFireball - are not listed: they
-     * are already covered by this handler running at the lowest event priority and standing down
-     * whenever it finds the rotation has been claimed for the tick.
-     */
-    private static boolean foreignRotation() {
-        if (Myau.moduleManager == null) {
-            return false;
-        }
-        return enabled(Scaffold.class)
-                || enabled(ChestAura.class)
-                || enabled(BedNuker.class)
-                || enabled(AutoBlockIn.class)
-                || enabled(AutoBedDef.class)
-                || enabled(AutoHeadHitter.class);
-    }
-
-    private static boolean enabled(Class<? extends Module> type) {
-        Module module = Myau.moduleManager.modules.get(type);
-        return module != null && module.isEnabled();
-    }
-
-    /**
      * The original's {@code TargetSettings.accepts}, then its reach and line-of-sight checks.
      * <p>
      * Distance is tested before the rest because it is a subtraction while line of sight is a ray
@@ -386,19 +347,24 @@ public class AimAssist extends Module {
     /**
      * Runs at the lowest event priority on purpose, so every module that steers the rotation has
      * already had its say by the time this one looks. If the rotation is already claimed for the
-     * tick this module stands down - which is the same outcome the original reaches by requesting
-     * at priority zero and letting its rotation manager pick the highest bidder.
+     * tick this module skips its own - the same outcome the original reaches by requesting at
+     * priority zero and letting its rotation manager pick the highest bidder.
+     * <p>
+     * Losing the tick is all that happens: the target, the running rotator and the silent
+     * rotation are all kept. The original loses the same arbitration without forgetting what it
+     * was doing, and throwing that state away makes every brush with another module restart the
+     * turn from scratch, which is far more disruptive than the conflict it was meant to avoid.
      */
     @EventTarget(Priority.LOWEST)
     public void onUpdate(UpdateEvent event) {
         if (event.getType() != EventType.PRE) {
             return;
         }
-        if (event.isRotated() || foreignRotation()) {
-            this.standDown();
-            return;
+        this.yielded = event.isRotated();
+        if (this.yielded) {
+            // Nothing of ours goes out this tick, and the pick stops following our rotation.
+            reported = null;
         }
-        this.yielded = false;
         if (!this.canAim()) {
             this.current = null;
             this.currentBone = null;
@@ -409,6 +375,9 @@ public class AimAssist extends Module {
         this.selectTarget();
         if (this.current == null || this.currentBone == null) {
             this.decaySilent(event);
+            return;
+        }
+        if (this.yielded) {
             return;
         }
 
@@ -473,6 +442,10 @@ public class AimAssist extends Module {
      * which would otherwise be a jump no mouse could produce.
      */
     private void decaySilent(UpdateEvent event) {
+        if (this.yielded) {
+            // Someone else owns the rotation; walking ours back would mean sending one.
+            return;
+        }
         if (this.silent == null || mc.thePlayer == null) {
             this.silent = null;
             reported = null;
