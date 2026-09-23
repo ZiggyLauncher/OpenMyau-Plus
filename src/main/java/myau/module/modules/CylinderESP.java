@@ -14,6 +14,9 @@ import myau.util.RenderUtil;
 import myau.util.TeamUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GlStateManager;
+import net.minecraft.client.renderer.Tessellator;
+import net.minecraft.client.renderer.WorldRenderer;
+import net.minecraft.client.renderer.vertex.DefaultVertexFormats;
 import net.minecraft.entity.player.EntityPlayer;
 import org.lwjgl.opengl.GL11;
 
@@ -30,10 +33,9 @@ import java.util.stream.Collectors;
  * fade, optional rings that drift around the target, and a flash when they take a hit.
  * <p>
  * The circle is trigonometry-free at render time - the unit circle for the chosen segment count is
- * computed once and cached, so a cylinder is {@code segments * 2} vertices of plain immediate-mode
- * geometry. Even with a full lobby in range that is a few thousand vertices per frame, which is
- * nothing next to the world itself, and there are no shaders, framebuffers or render target
- * switches anywhere in this module.
+ * computed once and cached - and every cylinder in view goes into one shared vertex buffer, so a
+ * whole lobby costs two draw calls rather than a matrix push and an immediate-mode begin/end each.
+ * There are no shaders, framebuffers or render target switches anywhere in this module.
  */
 public class CylinderESP extends Module {
     private static final Minecraft mc = Minecraft.getMinecraft();
@@ -67,6 +69,8 @@ public class CylinderESP extends Module {
     public final BooleanProperty bots = new BooleanProperty("Bots", false);
     public final BooleanProperty self = new BooleanProperty("Self", false);
 
+    /** Scratch for {@link #shade}, so the per-player colour costs no allocation. */
+    private final float[] shade = new float[4];
     /** Unit circle cached for the current segment count: {@code [i * 2] = cos, [i * 2 + 1] = sin}. */
     private float[] circle = new float[0];
     private int circleSegments = -1;
@@ -252,74 +256,75 @@ public class CylinderESP extends Module {
         }
         GlStateManager.shadeModel(GL11.GL_SMOOTH);
 
-        for (int index = 0; index < targets.size(); index++) {
-            EntityPlayer player = targets.get(index);
-            float presence = this.presence.getOrDefault(player.getEntityId(), 1.0F);
-            if (presence <= 0.02F) {
-                continue;
-            }
+        // Everything is batched into at most two draws. Drawn the obvious way - a matrix push and
+        // an immediate-mode begin/end per player - a full lobby is several thousand individual GL
+        // calls a frame, which is where this module used to spend its time. Positioning the rings
+        // on the CPU costs a handful of multiplications and lets every cylinder share one buffer.
+        Tessellator tessellator = Tessellator.getInstance();
+        WorldRenderer buffer = tessellator.getWorldRenderer();
+        float bobPhase = (float) Math.sin((now % 4000L) / 4000.0 * Math.PI * 2.0);
+        double spinCos = Math.cos(Math.toRadians(spin));
+        double spinSin = Math.sin(Math.toRadians(spin));
+        boolean faded = this.fade.getValue();
 
-            double x = player.lastTickPosX + (player.posX - player.lastTickPosX) * partialTicks - viewX;
-            double y = player.lastTickPosY + (player.posY - player.lastTickPosY) * partialTicks - viewY;
-            double z = player.lastTickPosZ + (player.posZ - player.lastTickPosZ) * partialTicks - viewZ;
-
-            int argb = this.colorFor(player, index * 120L);
-            float r = ((argb >> 16) & 0xFF) / 255.0F;
-            float g = ((argb >> 8) & 0xFF) / 255.0F;
-            float b = (argb & 0xFF) / 255.0F;
-            float a = ((argb >>> 24) & 0xFF) / 255.0F * presence;
-
-            // A hit whitens the cylinder briefly, the way vanilla flashes the model red.
-            if (this.hurtFlash.getValue() && player.hurtTime > 0) {
-                float flash = player.hurtTime / 10.0F;
-                r = r + (1.0F - r) * flash;
-                g = g + (1.0F - g) * flash * 0.4F;
-                b = b + (1.0F - b) * flash * 0.4F;
-            }
-
-            float cylinderRadius = player.width * 0.5F + this.radius.getValue() - 0.3F;
-            if (cylinderRadius < 0.1F) {
-                cylinderRadius = 0.1F;
-            }
-            // Grow out of the ground as the cylinder appears.
-            float cylinderHeight = player.height * this.height.getValue() * (0.35F + 0.65F * presence);
-
-            GlStateManager.pushMatrix();
-            GlStateManager.translate(x, y, z);
-
-            if (drawFill) {
-                // Side wall, bright at the base and transparent towards the top.
-                GL11.glBegin(GL11.GL_QUAD_STRIP);
-                for (int i = 0; i <= segments; i++) {
-                    float cos = circle[i * 2] * cylinderRadius;
-                    float sin = circle[i * 2 + 1] * cylinderRadius;
-                    GL11.glColor4f(r, g, b, a * 0.55F);
-                    GL11.glVertex3f(cos, 0.0F, sin);
-                    GL11.glColor4f(r, g, b, this.fade.getValue() ? 0.0F : a * 0.55F);
-                    GL11.glVertex3f(cos, cylinderHeight, sin);
+        if (drawFill) {
+            buffer.begin(GL11.GL_QUADS, DefaultVertexFormats.POSITION_COLOR);
+            for (int index = 0; index < targets.size(); index++) {
+                EntityPlayer player = targets.get(index);
+                float presence = this.presence.getOrDefault(player.getEntityId(), 1.0F);
+                if (presence <= 0.02F) {
+                    continue;
                 }
-                GL11.glEnd();
-            }
+                float[] shade = this.shade(player, index, presence);
+                float radius = this.radiusOf(player);
+                float height = this.heightOf(player, presence);
+                double x = this.interpolated(player.lastTickPosX, player.posX, partialTicks) - viewX;
+                double y = this.interpolated(player.lastTickPosY, player.posY, partialTicks) - viewY;
+                double z = this.interpolated(player.lastTickPosZ, player.posZ, partialTicks) - viewZ;
+                float bottomAlpha = shade[3] * 0.55F;
+                float topAlpha = faded ? 0.0F : bottomAlpha;
 
-            if (drawOutline) {
+                // Quads rather than a strip: a strip would join one player's cylinder to the next.
+                for (int i = 0; i < segments; i++) {
+                    float x0 = circle[i * 2] * radius;
+                    float z0 = circle[i * 2 + 1] * radius;
+                    float x1 = circle[(i + 1) * 2] * radius;
+                    float z1 = circle[(i + 1) * 2 + 1] * radius;
+                    buffer.pos(x + x0, y, z + z0).color(shade[0], shade[1], shade[2], bottomAlpha).endVertex();
+                    buffer.pos(x + x1, y, z + z1).color(shade[0], shade[1], shade[2], bottomAlpha).endVertex();
+                    buffer.pos(x + x1, y + height, z + z1).color(shade[0], shade[1], shade[2], topAlpha).endVertex();
+                    buffer.pos(x + x0, y + height, z + z0).color(shade[0], shade[1], shade[2], topAlpha).endVertex();
+                }
+            }
+            tessellator.draw();
+        }
+
+        if (drawOutline && (this.baseRing.getValue() || this.topRing.getValue())) {
+            buffer.begin(GL11.GL_LINES, DefaultVertexFormats.POSITION_COLOR);
+            for (int index = 0; index < targets.size(); index++) {
+                EntityPlayer player = targets.get(index);
+                float presence = this.presence.getOrDefault(player.getEntityId(), 1.0F);
+                if (presence <= 0.02F) {
+                    continue;
+                }
+                float[] shade = this.shade(player, index, presence);
+                float radius = this.radiusOf(player);
+                float height = this.heightOf(player, presence);
+                double x = this.interpolated(player.lastTickPosX, player.posX, partialTicks) - viewX;
+                double y = this.interpolated(player.lastTickPosY, player.posY, partialTicks) - viewY;
+                double z = this.interpolated(player.lastTickPosZ, player.posZ, partialTicks) - viewZ;
+
                 if (this.baseRing.getValue()) {
-                    GL11.glColor4f(r, g, b, a);
-                    this.ring(circle, segments, cylinderRadius, 0.0F);
+                    this.ring(buffer, circle, segments, radius, x, y, z, 1.0, 0.0,
+                            shade[0], shade[1], shade[2], shade[3]);
                 }
                 if (this.topRing.getValue()) {
-                    float bobOffset = this.bob.getValue()
-                            ? (float) Math.sin((now % 4000L) / 4000.0 * Math.PI * 2.0) * cylinderHeight * 0.04F
-                            : 0.0F;
-                    GlStateManager.pushMatrix();
-                    GlStateManager.translate(0.0F, cylinderHeight + bobOffset, 0.0F);
-                    GlStateManager.rotate(spin, 0.0F, 1.0F, 0.0F);
-                    GL11.glColor4f(r, g, b, a * 0.8F);
-                    this.ring(circle, segments, cylinderRadius * 0.92F, 0.0F);
-                    GlStateManager.popMatrix();
+                    float bobOffset = this.bob.getValue() ? bobPhase * height * 0.04F : 0.0F;
+                    this.ring(buffer, circle, segments, radius * 0.92F, x, y + height + bobOffset, z,
+                            spinCos, spinSin, shade[0], shade[1], shade[2], shade[3] * 0.8F);
                 }
             }
-
-            GlStateManager.popMatrix();
+            tessellator.draw();
         }
 
         GlStateManager.shadeModel(GL11.GL_FLAT);
@@ -331,12 +336,60 @@ public class CylinderESP extends Module {
         RenderUtil.resetColor();
     }
 
-    private void ring(float[] circle, int segments, float radius, float y) {
-        GL11.glBegin(GL11.GL_LINE_STRIP);
-        for (int i = 0; i <= segments; i++) {
-            GL11.glVertex3f(circle[i * 2] * radius, y, circle[i * 2 + 1] * radius);
+    /**
+     * One ring as line pairs into the shared buffer, rotated on the CPU by {@code (cos, sin)} so
+     * the spinning top ring needs no matrix of its own.
+     */
+    private void ring(WorldRenderer buffer, float[] circle, int segments, float radius,
+                      double x, double y, double z, double cos, double sin,
+                      float red, float green, float blue, float alpha) {
+        for (int i = 0; i < segments; i++) {
+            float ax = circle[i * 2] * radius;
+            float az = circle[i * 2 + 1] * radius;
+            float bx = circle[(i + 1) * 2] * radius;
+            float bz = circle[(i + 1) * 2 + 1] * radius;
+            buffer.pos(x + ax * cos - az * sin, y, z + ax * sin + az * cos)
+                    .color(red, green, blue, alpha).endVertex();
+            buffer.pos(x + bx * cos - bz * sin, y, z + bx * sin + bz * cos)
+                    .color(red, green, blue, alpha).endVertex();
         }
-        GL11.glEnd();
+    }
+
+    /** Interpolated world position for the current frame. */
+    private double interpolated(double last, double current, float partialTicks) {
+        return last + (current - last) * partialTicks;
+    }
+
+    private float radiusOf(EntityPlayer player) {
+        float radius = player.width * 0.5F + this.radius.getValue() - 0.3F;
+        return radius < 0.1F ? 0.1F : radius;
+    }
+
+    /** Grows out of the ground as the cylinder appears. */
+    private float heightOf(EntityPlayer player, float presence) {
+        return player.height * this.height.getValue() * (0.35F + 0.65F * presence);
+    }
+
+    /** {red, green, blue, alpha} for this player, including the hurt flash. */
+    private float[] shade(EntityPlayer player, int index, float presence) {
+        int argb = this.colorFor(player, index * 120L);
+        float red = ((argb >> 16) & 0xFF) / 255.0F;
+        float green = ((argb >> 8) & 0xFF) / 255.0F;
+        float blue = (argb & 0xFF) / 255.0F;
+        float alpha = ((argb >>> 24) & 0xFF) / 255.0F * presence;
+
+        // A hit whitens the cylinder briefly, the way vanilla flashes the model red.
+        if (this.hurtFlash.getValue() && player.hurtTime > 0) {
+            float flash = player.hurtTime / 10.0F;
+            red = red + (1.0F - red) * flash;
+            green = green + (1.0F - green) * flash * 0.4F;
+            blue = blue + (1.0F - blue) * flash * 0.4F;
+        }
+        this.shade[0] = red;
+        this.shade[1] = green;
+        this.shade[2] = blue;
+        this.shade[3] = alpha;
+        return this.shade;
     }
 
     @Override

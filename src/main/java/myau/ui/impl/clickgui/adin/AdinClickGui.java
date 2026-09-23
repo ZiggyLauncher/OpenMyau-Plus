@@ -105,6 +105,16 @@ public class AdinClickGui extends GuiScreen {
     private ModuleCategories.Category selected = ModuleCategories.Category.COMBAT;
     private boolean pillPlaced;
 
+    /**
+     * The visible category's modules, held rather than rebuilt.
+     * <p>
+     * The layout pass runs several times a frame - once to draw, again while a slider is being
+     * dragged, again on input - and building this list allocates and then sorts it every time.
+     * The set only changes when the category does or the screen is reopened.
+     */
+    private List<Module> categoryModules = new ArrayList<Module>();
+    private ModuleCategories.Category cachedCategory;
+
     private Module openModule;
     private long overlayOpenedAt;
 
@@ -137,6 +147,7 @@ public class AdinClickGui extends GuiScreen {
         super.initGui();
         FontManager.initializeFonts();
         AdinControls.reset();
+        this.cachedCategory = null;
         this.dragging = null;
         this.binding = null;
         this.pillPlaced = false;
@@ -235,7 +246,7 @@ public class AdinClickGui extends GuiScreen {
         float y = this.contentY() + PADDING - this.scroll;
         int index = 0;
 
-        for (Module module : ModuleCategories.modules(this.selected)) {
+        for (Module module : this.modules()) {
             if (module == null || module.isHidden()) {
                 continue;
             }
@@ -285,6 +296,15 @@ public class AdinClickGui extends GuiScreen {
         created.width = width;
         created.height = height;
         return created;
+    }
+
+    /** The visible category's modules, rebuilt only when the category changes. */
+    private List<Module> modules() {
+        if (this.cachedCategory != this.selected) {
+            this.cachedCategory = this.selected;
+            this.categoryModules = ModuleCategories.modules(this.selected);
+        }
+        return this.categoryModules;
     }
 
     private static List<Property<?>> properties(Module module) {

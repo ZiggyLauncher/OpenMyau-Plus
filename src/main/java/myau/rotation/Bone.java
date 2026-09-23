@@ -44,7 +44,10 @@ public enum Bone {
         if (this.center == null) {
             AxisAlignedBB box = target.getEntityBoundingBox()
                     .offset(x - target.posX, y - target.posY, z - target.posZ);
-            return closest(viewer.getPositionEyes(partialTicks), viewer.getLook(partialTicks), box);
+            // The ray is the live look, not the interpolated one - the original uses the plain
+            // look angle here. Interpolating it makes the aim point chase a rotation that is
+            // itself still catching up, which reads as the assist hunting around the hitbox.
+            return closest(viewer.getPositionEyes(partialTicks), viewer.getLook(1.0F), box);
         }
 
         float bodyYaw = rotationLerp(partialTicks, target.prevRenderYawOffset, target.renderYawOffset);

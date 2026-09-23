@@ -17,8 +17,12 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.util.AxisAlignedBB;
-import javax.vecmath.Vector4d;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.util.glu.GLU;
 
+import java.nio.FloatBuffer;
+import java.nio.IntBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -84,7 +88,85 @@ public class ESP extends Module {
         boolean living;
     }
 
+    /**
+     * Reused across frames. These are pooled rather than allocated per target because the screen
+     * pass runs every frame for every visible entity, and the garbage from doing otherwise is
+     * paid back in collections mid-fight.
+     */
     private final List<Projected> projected = new ArrayList<Projected>();
+    private int projectedCount;
+
+    private final FloatBuffer modelView = BufferUtils.createFloatBuffer(16);
+    private final FloatBuffer projection = BufferUtils.createFloatBuffer(16);
+    private final IntBuffer viewport = BufferUtils.createIntBuffer(16);
+    private final FloatBuffer screen = BufferUtils.createFloatBuffer(4);
+
+    /**
+     * Snapshots the matrices needed to project world points, once for the whole frame.
+     * <p>
+     * Every {@code glGet} forces the driver to finish what it has queued before it can answer, so
+     * reading them per corner - twenty-four times per entity - stalls the pipeline over and over.
+     * Read once, they cost nothing measurable.
+     */
+    private void captureMatrices() {
+        GL11.glGetFloat(GL11.GL_MODELVIEW_MATRIX, this.modelView);
+        GL11.glGetFloat(GL11.GL_PROJECTION_MATRIX, this.projection);
+        GL11.glGetInteger(GL11.GL_VIEWPORT, this.viewport);
+    }
+
+    /** A pooled slot, so a steady frame allocates nothing. */
+    private Projected next() {
+        if (this.projectedCount < this.projected.size()) {
+            return this.projected.get(this.projectedCount);
+        }
+        Projected created = new Projected();
+        this.projected.add(created);
+        return created;
+    }
+
+    /**
+     * Projects the eight corners of {@code bounds} and returns their screen-space extent, or false
+     * when the box is entirely behind the camera.
+     */
+    private boolean project(AxisAlignedBB bounds, double viewX, double viewY, double viewZ,
+                            float scaleFactor, Projected into) {
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
+        boolean any = false;
+
+        for (int corner = 0; corner < 8; corner++) {
+            double x = ((corner & 1) == 0 ? bounds.minX : bounds.maxX) - viewX;
+            double y = ((corner & 2) == 0 ? bounds.minY : bounds.maxY) - viewY;
+            double z = ((corner & 4) == 0 ? bounds.minZ : bounds.maxZ) - viewZ;
+
+            this.screen.clear();
+            if (!GLU.gluProject((float) x, (float) y, (float) z,
+                    this.modelView, this.projection, this.viewport, this.screen)) {
+                continue;
+            }
+            float depth = this.screen.get(2);
+            if (depth < 0.0F || depth >= 1.0F) {
+                continue;
+            }
+            float screenX = this.screen.get(0) / scaleFactor;
+            float screenY = (mc.displayHeight - this.screen.get(1)) / scaleFactor;
+            minX = Math.min(minX, screenX);
+            minY = Math.min(minY, screenY);
+            maxX = Math.max(maxX, screenX);
+            maxY = Math.max(maxY, screenY);
+            any = true;
+        }
+        if (!any) {
+            return false;
+        }
+        into.minX = minX;
+        into.minY = minY;
+        into.maxX = maxX;
+        into.maxY = maxY;
+        return true;
+    }
 
     public ESP() {
         super("ESP", false, false, "Box ESP, in the world or projected flat on screen");
@@ -93,6 +175,7 @@ public class ESP extends Module {
     @Override
     public void onDisabled() {
         this.projected.clear();
+        this.projectedCount = 0;
     }
 
     private int rgb() {
@@ -148,7 +231,8 @@ public class ESP extends Module {
 
     @EventTarget
     public void onRender3D(Render3DEvent event) {
-        this.projected.clear();
+        // The pool keeps its objects; only the live count resets.
+        this.projectedCount = 0;
         EntityPlayerSP player = mc.thePlayer;
         if (player == null || mc.theWorld == null) {
             return;
@@ -174,35 +258,30 @@ public class ESP extends Module {
         int blue = rgb & 0xFF;
         int fillAlpha = Math.round(255 * Math.max(0, Math.min(100, this.fillOpacity.getValue())) / 100.0F);
 
-        if (!flat) {
+        if (flat) {
+            this.captureMatrices();
+        } else {
             RenderUtil.enableRenderState();
         }
 
         for (int i = 0; i < mc.theWorld.loadedEntityList.size(); i++) {
             Entity entity = mc.theWorld.loadedEntityList.get(i);
-            if (!this.targeted(entity)) {
-                continue;
-            }
+            // Distance first: it is three subtractions, while targeted() walks the filters.
             double distanceSq = player.getDistanceSqToEntity(entity);
-            if (distanceSq > rangeSq) {
+            if (distanceSq > rangeSq || !this.targeted(entity)) {
                 continue;
             }
 
             AxisAlignedBB bounds = fitted(entity, partialTicks);
             if (flat) {
                 // Captured here, where the 3D matrices are still bound; drawn in the 2D pass.
-                Vector4d rect = RenderUtil.projectToScreen(entity, scaleFactor);
-                if (rect == null) {
+                Projected shot = this.next();
+                if (!this.project(bounds, viewX, viewY, viewZ, scaleFactor, shot)) {
                     continue;
                 }
-                Projected shot = new Projected();
-                shot.minX = (float) rect.x;
-                shot.minY = (float) rect.y;
-                shot.maxX = (float) rect.z;
-                shot.maxY = (float) rect.w;
                 shot.healthFraction = healthFraction(entity);
                 shot.living = entity instanceof EntityLivingBase;
-                this.projected.add(shot);
+                this.projectedCount++;
                 continue;
             }
 
@@ -234,7 +313,7 @@ public class ESP extends Module {
 
     @EventTarget
     public void onRender2D(Render2DEvent event) {
-        if (this.mode.getValue() != MODE_2D || this.projected.isEmpty()) {
+        if (this.mode.getValue() != MODE_2D || this.projectedCount == 0) {
             return;
         }
         int rgb = this.rgb();
@@ -243,7 +322,7 @@ public class ESP extends Module {
         int fillColor = (fillAlpha << 24) | rgb;
         boolean cornered = this.type.getValue() == TYPE_CORNERED;
 
-        for (int i = 0; i < this.projected.size(); i++) {
+        for (int i = 0; i < this.projectedCount; i++) {
             Projected shot = this.projected.get(i);
             float width = shot.maxX - shot.minX;
             float height = shot.maxY - shot.minY;
