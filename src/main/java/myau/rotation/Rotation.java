@@ -52,6 +52,24 @@ public final class Rotation {
                 MathHelper.clamp_float(this.pitch + deltaPitch, -90.0F, 90.0F));
     }
 
+    /**
+     * The unit look vector for this rotation, built the same way as
+     * {@code Entity.getVectorForRotation}.
+     * <p>
+     * Anything that needs "where the player is looking right now" should use
+     * {@code Rotation.of(player).direction()} rather than {@code player.getLook(...)}: for living
+     * entities {@code getLook} is built from {@code rotationYawHead}, which for the local player
+     * only catches up with the real yaw once per tick. Between ticks - the whole time you are
+     * moving the mouse - it points where you were looking last tick.
+     */
+    public Vec3 direction() {
+        float yawCos = MathHelper.cos(-this.yaw * 0.017453292F - (float) Math.PI);
+        float yawSin = MathHelper.sin(-this.yaw * 0.017453292F - (float) Math.PI);
+        float pitchCos = -MathHelper.cos(-this.pitch * 0.017453292F);
+        float pitchSin = MathHelper.sin(-this.pitch * 0.017453292F);
+        return new Vec3(yawSin * pitchCos, pitchSin, yawCos * pitchCos);
+    }
+
     public static float length(float x, float y) {
         return (float) Math.sqrt(x * x + y * y);
     }

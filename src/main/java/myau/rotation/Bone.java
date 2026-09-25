@@ -44,10 +44,12 @@ public enum Bone {
         if (this.center == null) {
             AxisAlignedBB box = target.getEntityBoundingBox()
                     .offset(x - target.posX, y - target.posY, z - target.posZ);
-            // The ray is the live look, not the interpolated one - the original uses the plain
-            // look angle here. Interpolating it makes the aim point chase a rotation that is
-            // itself still catching up, which reads as the assist hunting around the hitbox.
-            return closest(viewer.getPositionEyes(partialTicks), viewer.getLook(1.0F), box);
+            // The ray is built from the real yaw and pitch, as the original's getLookAngle() is.
+            // Not getLook(): on living entities that reads rotationYawHead, which only catches up
+            // with the real yaw once a tick, so the moment you move the mouse the "nearest point
+            // to your crosshair" is computed off where you were looking last tick - and the assist
+            // drags you back there. That is the snapping.
+            return closest(viewer.getPositionEyes(partialTicks), Rotation.of(viewer).direction(), box);
         }
 
         float bodyYaw = rotationLerp(partialTicks, target.prevRenderYawOffset, target.renderYawOffset);

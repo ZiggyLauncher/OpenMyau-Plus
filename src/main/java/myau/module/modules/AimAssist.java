@@ -157,16 +157,7 @@ public class AimAssist extends Module {
         if (rotation == null || entity == null || entity != mc.thePlayer) {
             return null;
         }
-        return direction(rotation);
-    }
-
-    /** Same construction as {@code Entity.getVectorForRotation}, so the ray matches vanilla's. */
-    private static Vec3 direction(Rotation rotation) {
-        float yawCos = MathHelper.cos(-rotation.yaw * 0.017453292F - (float) Math.PI);
-        float yawSin = MathHelper.sin(-rotation.yaw * 0.017453292F - (float) Math.PI);
-        float pitchCos = -MathHelper.cos(-rotation.pitch * 0.017453292F);
-        float pitchSin = MathHelper.sin(-rotation.pitch * 0.017453292F);
-        return new Vec3(yawSin * pitchCos, pitchSin, yawCos * pitchCos);
+        return rotation.direction();
     }
 
     private RotationConfig config() {
@@ -222,8 +213,9 @@ public class AimAssist extends Module {
             return false;
         }
         // Not a setting: two aim systems pulling the view at once is a bug, not a choice, so
-        // KillAura always wins while it holds a target.
-        return !this.killAuraBusy();
+        // KillAura always wins while it holds a target, and Clutch while it is building - its
+        // placements are validated against the rotation, so being nudged off it fails them.
+        return !this.killAuraBusy() && !Clutch.isActive();
     }
 
     /**
@@ -295,7 +287,8 @@ public class AimAssist extends Module {
         this.currentBone = null;
         EntityPlayerSP player = mc.thePlayer;
         Vec3 eye = player.getPositionEyes(1.0F);
-        Vec3 look = player.getLook(1.0F);
+        // From the real yaw, not getLook(): see Rotation.direction for why that one lags a tick.
+        Vec3 look = Rotation.of(player).direction();
         double halfFov = this.fov.getValue() * 0.5;
         double bestScore = Double.MAX_VALUE;
 

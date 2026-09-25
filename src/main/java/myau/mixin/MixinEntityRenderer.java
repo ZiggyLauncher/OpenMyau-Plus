@@ -92,6 +92,8 @@ public abstract class MixinEntityRenderer {
             )}
     )
     private void myau$turnAfterMouse(float partialTicks, long nanoTime, CallbackInfo callbackInfo) {
+        // Clutch first: while it is building, the aim assist stands down (see AimAssist.canAim).
+        Clutch.turn(partialTicks);
         AimAssist.turn(partialTicks);
     }
 
