@@ -2,6 +2,7 @@ package myau.module.modules;
 
 import myau.module.Module;
 import myau.property.properties.BooleanProperty;
+import myau.property.properties.ColorProperty;
 import myau.property.properties.FloatProperty;
 import myau.property.properties.IntProperty;
 import myau.property.properties.ModeProperty;
@@ -11,6 +12,7 @@ import myau.ui.impl.clickgui.modern.ModernClickGui;
 import myau.ui.impl.clickgui.raven.RavenClickGui;
 import myau.ui.impl.clickgui.cheadle.CheadleClickGui;
 import myau.ui.impl.clickgui.adin.AdinClickGui;
+import myau.ui.impl.clickgui.vape.VapeClickGui;
 import myau.util.KeyBindUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiScreen;
@@ -44,7 +46,7 @@ public class ClickGUIModule extends Module {
     };
 
     public ModeProperty accentColor = new ModeProperty("Color", 0, COLOR_NAMES);
-    public ModeProperty style = new ModeProperty("Style", 4, new String[]{"Normal", "Raven B3", "Raven B4", "Cheadle", "Modern", "Rise", "Adin"});
+    public ModeProperty style = new ModeProperty("Style", 4, new String[]{"Normal", "Raven B3", "Raven B4", "Cheadle", "Modern", "Rise", "Adin", "Vape"});
     public BooleanProperty saveGuiState = new BooleanProperty("Save GUI State", true);
     public BooleanProperty shadow = new BooleanProperty("Shadow", true);
     public BooleanProperty glass = new BooleanProperty("Glass", true);
@@ -53,10 +55,23 @@ public class ClickGUIModule extends Module {
     public IntProperty windowHeight = new IntProperty("Window Height", 400, 200, 800);
     public FloatProperty cornerRadius = new FloatProperty("Corner Radius", 8.0f, 0.0f, 20.0f);
 
+    // ── Vape style ──────────────────────────────────────────────────────────
+    /** Vape's "Gui Color"; its default teal. */
+    public ColorProperty vapeColor = new ColorProperty("Vape Color", 0x058669, this::isVapeStyle);
+    /** Vape's "GUI Scale": Auto picks by window height like the original. */
+    public ModeProperty vapeScale = new ModeProperty("Vape Scale", 0,
+            new String[]{"Auto", "Tiny", "Small", "Normal", "Large", "Huge"}, this::isVapeStyle);
+    /** Vape's "Blur background". */
+    public BooleanProperty vapeBlur = new BooleanProperty("Vape Blur", true, this::isVapeStyle);
+
     public Color getAccentColor() {
         int idx = accentColor.getValue();
         if (idx < 0 || idx >= COLORS.length) idx = 0;
         return new Color(COLORS[idx], true);
+    }
+
+    private boolean isVapeStyle() {
+        return this.style.getValue() == 7;
     }
 
     public ClickGUIModule() {
@@ -72,6 +87,7 @@ public class ClickGUIModule extends Module {
                 || mc.currentScreen instanceof RavenClickGui
                 || mc.currentScreen instanceof CheadleClickGui
                 || mc.currentScreen instanceof AdinClickGui
+                || mc.currentScreen instanceof VapeClickGui
                 || mc.currentScreen instanceof myau.ui.impl.clickgui.rise.RiseClickGUI
                 || mc.currentScreen instanceof myau.ui.impl.clickgui.modern.ModernClickGui;
         try {
@@ -131,6 +147,9 @@ public class ClickGUIModule extends Module {
         if (style.getValue() == 6) {
             return AdinClickGui.getInstance();
         }
+        if (style.getValue() == 7) {
+            return VapeClickGui.getInstance();
+        }
         return ClickGuiScreen.getInstance();
     }
 
@@ -141,6 +160,7 @@ public class ClickGUIModule extends Module {
             if (mc.currentScreen instanceof ClickGui || mc.currentScreen instanceof ClickGuiScreen
                     || mc.currentScreen instanceof RavenClickGui || mc.currentScreen instanceof CheadleClickGui
                     || mc.currentScreen instanceof ModernClickGui || mc.currentScreen instanceof AdinClickGui
+                    || mc.currentScreen instanceof VapeClickGui
                     || mc.currentScreen instanceof myau.ui.impl.clickgui.rise.RiseClickGUI) {
                 openSelectedGui();
             }

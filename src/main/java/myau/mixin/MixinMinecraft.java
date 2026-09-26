@@ -74,6 +74,9 @@ public abstract class MixinMinecraft {
             at = {@At("HEAD")}
     )
     private void runTick(CallbackInfo callbackInfo) {
+        // The clutch's aim is topped up to a whole tick first, whether or not the module is on,
+        // so a released aim can finish and everything this tick sees where it ended up.
+        myau.module.modules.Clutch.driverTick();
         if (this.theWorld != null && this.thePlayer != null) {
             EventManager.call(new TickEvent(EventType.PRE));
         }

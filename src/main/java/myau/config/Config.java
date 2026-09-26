@@ -116,6 +116,7 @@ public class Config {
             }
 
             JsonObject jsonObject = parsed.getAsJsonObject();
+            migrateBlockIn(jsonObject);
             for (Module module : Myau.moduleManager.allModules()) {
                 JsonElement moduleObj = jsonObject.get(module.getName());
                 if (moduleObj != null && moduleObj.isJsonObject()) {
@@ -168,6 +169,23 @@ public class Config {
         } catch (Exception e) {
             ((IAccessorMinecraft) mc).getLogger().error("Error loading config: " + e.getMessage());
             ChatUtil.sendFormatted(String.format("%sConfig couldn't be loaded (&c&o%s&r)&r", Myau.clientName, file.getName()));
+        }
+    }
+
+    /**
+     * Up to 2.6 the block-in module was called Clutch; that name now belongs to the fall saver.
+     * A config written before the rename keeps block-in's settings, bind and on/off state under
+     * "Clutch" (recognisable by its aim-speed), so they are moved to BlockIn rather than being
+     * applied to the new module.
+     */
+    private static void migrateBlockIn(JsonObject root) {
+        JsonElement clutch = root.get("Clutch");
+        if (clutch == null || !clutch.isJsonObject() || root.has("BlockIn")) {
+            return;
+        }
+        if (clutch.getAsJsonObject().has("aim-speed")) {
+            root.remove("Clutch");
+            root.add("BlockIn", clutch);
         }
     }
 

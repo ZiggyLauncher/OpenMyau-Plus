@@ -1,6 +1,6 @@
 package myau.clutch;
 
-import myau.module.modules.Clutch;
+import myau.module.modules.BlockIn;
 import net.minecraft.util.BlockPos;
 import net.minecraft.world.World;
 
@@ -13,11 +13,11 @@ import java.util.Vector;
  * tunnel along an existing wall beats a shorter one through the open.
  */
 public final class BedSearch implements SearchStrategy<PlacementNode> {
-    private final Clutch clutch;
+    private final BlockIn blockIn;
     private final World world;
 
-    public BedSearch(Clutch clutch, World world) {
-        this.clutch = clutch;
+    public BedSearch(BlockIn blockIn, World world) {
+        this.blockIn = blockIn;
         this.world = world;
     }
 
@@ -33,6 +33,6 @@ public final class BedSearch implements SearchStrategy<PlacementNode> {
 
     @Override
     public int scorePath(Vector<PlacementNode> path) {
-        return this.clutch.computePathCost(this.world, path);
+        return this.blockIn.computePathCost(this.world, path);
     }
 }

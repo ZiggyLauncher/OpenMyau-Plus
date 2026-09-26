@@ -54,7 +54,7 @@ public final class ModuleCategories {
             "BlockOverlay", "Ambience", "Capes", "FreeLook", "ItemPhysics");
     private static final Set<String> PLAYER = set(
             "AutoHeal", "FakeLag", "AutoTool", "ChestStealer", "AutoBedDef", "InvManager", "InvWalk", "Scaffold",
-            "AutoBlockIn", "Clutch", "AutoSwap", "SpeedMine", "FastPlace", "GhostHand", "MCF", "AntiDebuff", "FlagDetector",
+            "AutoBlockIn", "BlockIn", "Clutch", "AutoSwap", "SpeedMine", "FastPlace", "GhostHand", "MCF", "AntiDebuff", "FlagDetector",
             "AutoGapple", "ChestAura", "AutoHeadHitter", "ThrowAura");
 
     private static final Comparator<Module> BY_NAME = Comparator.comparing(m -> m.getName().toLowerCase(Locale.ROOT));

@@ -213,9 +213,9 @@ public class AimAssist extends Module {
             return false;
         }
         // Not a setting: two aim systems pulling the view at once is a bug, not a choice, so
-        // KillAura always wins while it holds a target, and Clutch while it is building - its
-        // placements are validated against the rotation, so being nudged off it fails them.
-        return !this.killAuraBusy() && !Clutch.isActive();
+        // KillAura always wins while it holds a target, and BlockIn and Clutch while they aim -
+        // their placements are validated against the rotation, so being nudged off it fails them.
+        return !this.killAuraBusy() && !BlockIn.isActive() && !Clutch.isAiming();
     }
 
     /**
