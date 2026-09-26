@@ -17,10 +17,13 @@ import myau.property.properties.ItemListProperty;
 import myau.property.properties.ModeProperty;
 import myau.property.properties.TextProperty;
 import myau.ui.ModuleCategories;
+import myau.mixin.IAccessorEntityRenderer;
 import myau.util.KeyBindUtil;
-import myau.util.shader.BlurUtils;
 import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.ScaledResolution;
+import net.minecraft.client.renderer.OpenGlHelper;
+import net.minecraft.client.shader.ShaderGroup;
+import net.minecraft.util.ResourceLocation;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 
@@ -50,6 +53,8 @@ import java.util.Set;
  */
 public final class VapeClickGui extends GuiScreen {
     private static final File STATE_FILE = new File("./config/Myau/", "clickgui_vape.txt");
+    private static final ResourceLocation BLUR_SHADER = new ResourceLocation("shaders/post/blur.json");
+    private static final String BLUR_SHADER_NAME = BLUR_SHADER.toString();
     private static VapeClickGui instance;
 
     final List<VFrame> frames = new ArrayList<VFrame>();
@@ -73,6 +78,8 @@ public final class VapeClickGui extends GuiScreen {
     private ListFrame openListFrame;
     private final Set<String> hiddenModules = new HashSet<String>();
     private boolean built;
+    /** Whether this GUI put the background blur shader on. */
+    private boolean blurring;
     private JsonObject savedFrames;
 
     public static VapeClickGui getInstance() {
@@ -255,11 +262,7 @@ public final class VapeClickGui extends GuiScreen {
     public void drawScreen(int mouseX, int mouseY, float partialTicks) {
         ScaledResolution resolution = new ScaledResolution(this.mc);
         ClickGUIModule module = VapeTheme.module();
-        if (module == null || module.vapeBlur.getValue()) {
-            BlurUtils.prepareBlur();
-            drawRect(0, 0, resolution.getScaledWidth(), resolution.getScaledHeight(), -1);
-            BlurUtils.blurEnd(3, 3.0F);
-        }
+        this.updateBackgroundBlur(module == null || module.vapeBlur.getValue());
 
         VapeRender.begin(resolution.getScaleFactor());
         try {
@@ -288,6 +291,66 @@ public final class VapeClickGui extends GuiScreen {
         } finally {
             VapeRender.end();
         }
+    }
+
+    /**
+     * "Blur background", done the way Vape does it on this version
+     * ({@code ShaderGroupRenderStateManager}): Minecraft's own {@code blur.json} post-process
+     * shader runs over the world while the GUI is open, and the GUI draws crisp on top.
+     * <p>
+     * This replaces a masked offscreen blur that painted the whole screen white on setups where
+     * that framebuffer pass does not work (OptiFine). The vanilla shader pipeline cannot do that:
+     * where post shaders are unavailable - no framebuffers, anaglyph 3D, an OptiFine shader pack,
+     * or another shader already running - the blur is simply skipped and the game shows through.
+     */
+    private void updateBackgroundBlur(boolean wanted) {
+        if (!wanted) {
+            this.stopBackgroundBlur();
+            return;
+        }
+        if (this.blurring || this.mc.theWorld == null || this.mc.entityRenderer == null) {
+            return;
+        }
+        if (!OpenGlHelper.shadersSupported || !OpenGlHelper.isFramebufferEnabled()
+                || this.mc.gameSettings.anaglyph || this.mc.entityRenderer.isShaderActive() || optifineShaderPack()) {
+            return;
+        }
+        try {
+            ((IAccessorEntityRenderer) this.mc.entityRenderer).callLoadShader(BLUR_SHADER);
+            ShaderGroup group = this.mc.entityRenderer.getShaderGroup();
+            this.blurring = group != null && BLUR_SHADER_NAME.equals(group.getShaderGroupName());
+        } catch (Throwable throwable) {
+            this.blurring = false;
+        }
+    }
+
+    /** Takes the blur off again - only if the running shader is still ours. */
+    private void stopBackgroundBlur() {
+        if (!this.blurring) {
+            return;
+        }
+        this.blurring = false;
+        try {
+            ShaderGroup group = this.mc.entityRenderer.getShaderGroup();
+            if (group != null && BLUR_SHADER_NAME.equals(group.getShaderGroupName())) {
+                this.mc.entityRenderer.stopUseShader();
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** OptiFine shader packs replace the post-process pipeline; Vape leaves the blur off there too. */
+    private static boolean optifineShaderPack() {
+        for (String name : new String[]{"Config", "net.optifine.Config"}) {
+            try {
+                Object shaders = Class.forName(name).getMethod("isShaders").invoke(null);
+                if (shaders instanceof Boolean) {
+                    return (Boolean) shaders;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return false;
     }
 
     /** Keeps the settings page, the main frame and the list editor in step. */
@@ -599,6 +662,7 @@ public final class VapeClickGui extends GuiScreen {
         this.focus(null);
         this.binding = null;
         this.closePopups();
+        this.stopBackgroundBlur();
         this.saveState();
         ClickGUIModule module = VapeTheme.module();
         if (module != null && !module.isSwitchingGuiStyle()) {

@@ -1,545 +1,883 @@
 package myau.module.modules;
 
 import myau.Myau;
-import myau.event.EventTarget;
-import myau.event.types.EventType;
-import myau.event.types.Priority;
-import myau.events.MoveInputEvent;
-import myau.events.UpdateEvent;
+import myau.mixin.IAccessorMinecraft;
 import myau.module.Module;
 import myau.property.properties.BooleanProperty;
 import myau.property.properties.FloatProperty;
+import myau.property.properties.IntProperty;
+import myau.property.properties.ItemListProperty;
 import myau.property.properties.ModeProperty;
-import myau.rotation.Bone;
-import myau.rotation.Rotation;
-import myau.rotation.RotationConfig;
-import myau.rotation.Rotator;
-import myau.util.MoveUtil;
-import myau.util.RotationUtil;
 import myau.util.TeamUtil;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.entity.EntityPlayerSP;
+import net.minecraft.enchantment.Enchantment;
+import net.minecraft.enchantment.EnchantmentHelper;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLivingBase;
+import net.minecraft.entity.SharedMonsterAttributes;
+import net.minecraft.entity.ai.attributes.AttributeModifier;
+import net.minecraft.entity.monster.IMob;
+import net.minecraft.entity.passive.EntityAnimal;
+import net.minecraft.entity.passive.EntityVillager;
+import net.minecraft.entity.passive.EntityWaterMob;
 import net.minecraft.entity.player.EntityPlayer;
-import net.minecraft.item.ItemAxe;
+import net.minecraft.item.ItemArmor;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.ItemSword;
-import net.minecraft.util.MathHelper;
+import net.minecraft.item.ItemTool;
+import net.minecraft.potion.Potion;
+import net.minecraft.potion.PotionEffect;
+import net.minecraft.util.AxisAlignedBB;
+import net.minecraft.util.MovingObjectPosition;
 import net.minecraft.util.Vec3;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Random;
+
 /**
- * Bone-based aim assist.
+ * A port of Vape's AimAssist in its default "Simple" mode.
  * <p>
- * Every tick it picks the target whose nearest enabled bone sits closest to the centre of your
- * view, then hands that bone to a rotator which walks the view toward it. Nothing snaps: the
- * rotator only ever produces a step, and the aim point is re-evaluated every frame, so the turn
- * tracks a moving target instead of chasing where it used to be.
+ * It works in mouse counts rather than degrees. A worker thread runs the aim about once a
+ * millisecond (Vape's {@code Thread.sleep(1)} loop): it picks a target, predicts where it is
+ * heading, and builds up horizontal (and optionally vertical) "force" from how far off you are,
+ * with a random component, a boost when close, and optional extra speed while strafing away. That
+ * force is double-buffered - collected for ten runs, then applied - and turned into fractional
+ * mouse counts. Every frame the whole counts are taken out and moved through the vanilla mouse
+ * path ({@code setAngles}, which is exactly Vape's {@code applyTrackedMouseDelta}), scaled by your
+ * sensitivity the way the game scales a real mouse, and the fractions carry over. A slow random
+ * drift is mixed in so it never tracks perfectly.
  * <p>
- * Two rotators are available. <b>Ease-Out-Cubic</b> covers a share of the remaining angle each
- * step and tapers in. <b>WindMouse</b> integrates a gravity pull toward the target against a
- * random sideways wind, which drifts and settles the way a hand does; it also folds your own
- * mouse movement back into its current segment, so moving the mouse steers the assist rather
- * than fighting it.
- * <p>
- * In <b>Regular</b> mode the turn goes through {@link Entity#setAngles}, the exact path the
- * vanilla mouse uses, so the view really moves. In <b>Silent</b> mode the view is untouched and
- * only the rotation reported to the server changes, quantised onto the same sensitivity steps a
- * real mouse can produce.
+ * Differences from the original, all deliberate:
+ * <ul>
+ *     <li>Only the Simple mode is ported; Vape's Adaptive mode is not, so there is no mode
+ *     setting.</li>
+ *     <li>The target filter's "Neutral" option is left out: the original never reads it when
+ *     choosing a target.</li>
+ *     <li>The mouse-count totals are shared between the worker and the render thread under a lock,
+ *     where the original races; the counts are the same, just none go missing.</li>
+ *     <li>It still stands down while KillAura has a target or BlockIn/Clutch are aiming, as the
+ *     module it replaces did - two aims pulling at once is a bug, not a setting.</li>
+ * </ul>
  */
 public class AimAssist extends Module {
     private static final Minecraft mc = Minecraft.getMinecraft();
 
-    private static final int MODE_REGULAR = 0;
-    private static final int MODE_SILENT = 1;
-    private static final int PRIORITY_CLOSEST = 0;
-    private static final int PRIORITY_HEALTH = 1;
+    private static final int AREA_CENTER = 0;
+    private static final int AREA_CLOSEST = 1;
+    private static final int TARGET_YAW = 0;
+    private static final int TARGET_DISTANCE = 1;
+    private static final int TARGET_ARMOR = 2;
+    private static final int TARGET_THREAT = 3;
+    private static final int TARGET_HEALTH = 4;
 
-    /** Vanilla converts mouse counts to degrees with this factor, and setAngles multiplies it in. */
-    private static final float TURN_FACTOR = 0.15F;
-    /** Rotation priority for the silent path. KillAura uses 1, so it always wins over this. */
-    private static final int ROTATION_PRIORITY = 0;
-    /** Fixed reach, as in the original - it is not a setting there and should not be one here. */
-    private static final double RANGE = 6.0;
-
-    // Setting order and names follow the original module exactly.
-    public final FloatProperty fov = new FloatProperty("fov", 80.0F, 10.0F, 360.0F);
-    public final ModeProperty mode = new ModeProperty("mode", MODE_REGULAR, new String[]{"Regular", "Silent"});
-    public final ModeProperty rotation = new ModeProperty("rotation", RotationConfig.EASE_OUT_CUBIC, RotationConfig.SMOOTHING);
-    public final FloatProperty smoothness = new FloatProperty("smoothness", 50.0F, 0.0F, 100.0F);
-    public final BooleanProperty onHold = new BooleanProperty("onHold", false);
-    public final BooleanProperty weaponsOnly = new BooleanProperty("weaponsOnly", false);
-    public final ModeProperty priority = new ModeProperty("target", PRIORITY_CLOSEST, new String[]{"Closest to FOV", "Lowest health"});
-    /**
-     * Rotates your movement input to match the rotation being reported, the way the original's
-     * MoveFix does. Silent mode is unusable without it: the server simulates your movement from
-     * the rotation you send, so sending one rotation while walking along another is a movement
-     * mismatch on every tick, which is what a prediction anticheat flags and lags you back for.
-     */
-    public final BooleanProperty moveFix = new BooleanProperty("move-fix", true,
-            () -> this.mode.getValue() == MODE_SILENT);
-    // The original's TargetSettings group: Players, Invisible, Entities. It carries no team or
-    // bot filter, so neither does this; friends are excluded unconditionally, as there.
+    // ------------------------------------------------------------------ target filter
     public final BooleanProperty players = new BooleanProperty("players", true);
-    public final BooleanProperty invisible = new BooleanProperty("invisible", false);
-    public final BooleanProperty entities = new BooleanProperty("entities", false);
+    public final BooleanProperty mobs = new BooleanProperty("mobs", false);
+    public final BooleanProperty peaceful = new BooleanProperty("peaceful", false);
+    public final BooleanProperty ignoreNaked = new BooleanProperty("ignore-naked", false);
+    public final BooleanProperty ignoreInvisible = new BooleanProperty("ignore-invisible", false);
+    public final BooleanProperty ignoreBehindWalls = new BooleanProperty("ignore-behind-walls", false);
 
-    /**
-     * Selecting multipoint hides the named bones, matching the original: multipoint already
-     * tracks whichever part of the hitbox is nearest the crosshair, so a fixed bone next to it
-     * would only ever pull the aim away from it.
-     */
-    public final BooleanProperty boneMultipoint = new BooleanProperty("multipoint", false);
-    public final BooleanProperty boneHead = new BooleanProperty("head", true, () -> !this.boneMultipoint.getValue());
-    public final BooleanProperty boneBody = new BooleanProperty("body", false, () -> !this.boneMultipoint.getValue());
-    public final BooleanProperty boneArms = new BooleanProperty("arms", false, () -> !this.boneMultipoint.getValue());
-    public final BooleanProperty boneLegs = new BooleanProperty("legs", false, () -> !this.boneMultipoint.getValue());
+    // ------------------------------------------------------------------ settings (Vape's order)
+    public final BooleanProperty requireMouseDown = new BooleanProperty("require-mouse-down", true);
+    public final BooleanProperty strafeIncrease = new BooleanProperty("strafe-increase", false);
+    public final BooleanProperty checkBlockBreak = new BooleanProperty("check-block-break", false);
+    public final BooleanProperty breakBlocksWhitelist = new BooleanProperty("break-blocks-whitelist", false,
+            this.checkBlockBreak::getValue);
+    public final ItemListProperty blockBreakItems = new ItemListProperty("items", "pickaxe,shovel",
+            () -> this.checkBlockBreak.getValue() && this.breakBlocksWhitelist.getValue());
+    public final BooleanProperty aimVertically = new BooleanProperty("aim-vertically", false);
+    public final FloatProperty verticalSpeed = new FloatProperty("vertical-speed", 5.0F, 1.0F, 10.0F,
+            this.aimVertically::getValue);
+    public final FloatProperty horizontalSpeed = new FloatProperty("horizontal-speed", 5.0F, 1.0F, 10.0F);
+    public final IntProperty maxAngle = new IntProperty("max-angle", 180, 1, 360);
+    public final FloatProperty distance = new FloatProperty("distance", 5.0F, 1.0F, 8.0F);
+    public final BooleanProperty limitToItems = new BooleanProperty("limit-to-items", false);
+    public final ItemListProperty allowedItems = new ItemListProperty("allowed-items", "sword",
+            this.limitToItems::getValue);
+    public final ModeProperty targetArea = new ModeProperty("target-area", AREA_CENTER, new String[]{"Center", "Closest"});
+    public final ModeProperty targetMode = new ModeProperty("target-mode", TARGET_YAW,
+            new String[]{"Yaw", "Distance", "Armor", "Threat", "Health"});
 
-    /** The target chosen this tick, and the bone on it being aimed at. */
-    private EntityLivingBase current;
-    private Bone currentBone;
-    /** Kept between ticks so the visible path can keep stepping toward the same bone. */
-    private Rotator rotator;
-    private int rotatorKind = -1;
-    /** Silent mode only: the rotation being reported, which decays back to the real one. */
-    private Rotation silent;
-    /** Set while another module owns the rotation, so the per-frame visible turn stops too. */
-    private boolean yielded;
-    private long lastFrameNanos;
+    // ------------------------------------------------------------------ aim state
+    private static Thread worker;
+
+    /** Read by the render thread and BackTrack, written by the worker. */
+    private volatile EntityLivingBase target;
+    private final Object countsLock = new Object();
+    /** Fractional mouse counts waiting to be moved, and the drift folded into them (under the lock). */
+    private float horizontalMouseAccumulator;
+    private float verticalMouseAccumulator;
+    private int driftX;
+    private int driftY;
+
+    // Worker-thread state only.
+    private final Random random = new Random();
+    private final Random sharedRandom = new Random();
+    private int blockBreakCooldown;
+    private int randomOffsetX;
+    private int randomOffsetY;
+    private double driftTimer;
+    private int swapTickCounter;
+    private float pitchBoost;
+    private float yawBoost;
+    private float horizontalVelocity;
+    private float horizontalVelocityBuffer;
+    private float verticalVelocity;
+    private float verticalVelocityBuffer;
+    private double targetX;
+    private double targetY;
+    private double targetZ;
+    private double prevTargetX;
+    private double prevTargetZ;
+    private boolean prevOnLeft;
+    private boolean prevAbove;
+    private double lastAngleDiff;
+    private int sampleCounter;
+    private int retargetCounter;
 
     public AimAssist() {
-        super("AimAssist", false, false, "Bone-based aim assist with humanised rotation");
+        super("AimAssist", false, false, "Smoothly aims to closest valid target");
     }
 
     @Override
     public void onEnabled() {
-        this.reset();
+        startWorker();
     }
 
     @Override
     public void onDisabled() {
-        this.reset();
-        this.silent = null;
-        reported = null;
+        this.target = null;
+        this.resetRotationState();
     }
 
-    private void reset() {
-        this.current = null;
-        this.currentBone = null;
-        this.rotator = null;
-        this.rotatorKind = -1;
-        this.lastFrameNanos = 0L;
-        this.yielded = false;
-    }
-
-    /**
-     * The rotation the server currently believes we are looking along, or null in Regular mode.
-     * Read from the render thread by the pick redirect, written on the client thread.
-     */
-    private static volatile Rotation reported;
-
-    /** The entity being assisted onto, for other modules and the HUD. Null when idle. */
     public EntityLivingBase getTarget() {
-        return this.isEnabled() ? this.current : null;
-    }
-
-    /**
-     * The look vector the client's own hit detection should use for {@code entity}, or null to
-     * leave it alone.
-     * <p>
-     * Without this, silent mode changes only the rotation in the outgoing packet: the server sees
-     * the aim, but {@code EntityRenderer.getMouseOver} still traces along the real view, so there
-     * is never anything under the crosshair to attack. Pointing the pick down the same ray is
-     * what makes the mode do anything at all.
-     */
-    public static Vec3 silentLook(Entity entity) {
-        Rotation rotation = reported;
-        if (rotation == null || entity == null || entity != mc.thePlayer) {
-            return null;
-        }
-        return rotation.direction();
-    }
-
-    private RotationConfig config() {
-        float smooth = Math.max(0.0F, Math.min(1.0F, this.smoothness.getValue() / 100.0F));
-        int curve = this.rotation.getValue();
-        return this.mode.getValue() == MODE_SILENT
-                ? RotationConfig.silent(smooth, curve)
-                : RotationConfig.visible(smooth, curve);
-    }
-
-    /** The live rotator, rebuilt when the curve is switched so no state carries across. */
-    private Rotator rotator() {
-        int kind = this.rotation.getValue();
-        if (this.rotator == null || this.rotatorKind != kind) {
-            this.rotatorKind = kind;
-            this.rotator = this.config().createRotator();
-        }
-        return this.rotator;
-    }
-
-    private boolean boneEnabled(Bone bone) {
-        switch (bone) {
-            case MULTIPOINT:
-                return this.boneMultipoint.getValue();
-            case HEAD:
-                return this.boneHead.getValue();
-            case BODY:
-                return this.boneBody.getValue();
-            case LEFT_ARM:
-            case RIGHT_ARM:
-                return this.boneArms.getValue();
-            case LEFT_LEG:
-            case RIGHT_LEG:
-                return this.boneLegs.getValue();
-            default:
-                return false;
-        }
-    }
-
-    /**
-     * The original's {@code Game.playing}: in a world, no screen open, and the mouse grabbed.
-     * {@code inGameHasFocus} is this version's mouse-grabbed flag. There is deliberately no check
-     * on your own health - the original has none either.
-     */
-    private boolean canAim() {
-        if (mc.thePlayer == null || mc.theWorld == null || mc.currentScreen != null || !mc.inGameHasFocus) {
-            return false;
-        }
-        if (this.onHold.getValue() && !mc.gameSettings.keyBindAttack.isKeyDown()) {
-            return false;
-        }
-        if (this.weaponsOnly.getValue() && !holdsWeapon()) {
-            return false;
-        }
-        // Not a setting: two aim systems pulling the view at once is a bug, not a choice, so
-        // KillAura always wins while it holds a target, and BlockIn and Clutch while they aim -
-        // their placements are validated against the rotation, so being nudged off it fails them.
-        return !this.killAuraBusy() && !BlockIn.isActive() && !Clutch.isAiming();
-    }
-
-    /**
-     * The original tests for the item's weapon component, which on this version means the classes
-     * that carry an attack damage modifier by default: swords and axes.
-     */
-    private static boolean holdsWeapon() {
-        ItemStack held = mc.thePlayer.getHeldItem();
-        if (held == null || held.getItem() == null) {
-            return false;
-        }
-        return held.getItem() instanceof ItemSword || held.getItem() instanceof ItemAxe;
-    }
-
-    /** KillAura owns the rotation while it has a target; two modules aiming at once looks wrong. */
-    private boolean killAuraBusy() {
-        if (Myau.moduleManager == null) {
-            return false;
-        }
-        Module module = Myau.moduleManager.modules.get(KillAura.class);
-        if (!(module instanceof KillAura) || !module.isEnabled()) {
-            return false;
-        }
-        return ((KillAura) module).getTarget() != null;
-    }
-
-    /**
-     * The original's {@code TargetSettings.accepts}, then its reach and line-of-sight checks.
-     * <p>
-     * Distance is tested before the rest because it is a subtraction while line of sight is a ray
-     * trace; in a full lobby that ordering is most of the cost.
-     */
-    private boolean targeted(EntityPlayerSP player, EntityLivingBase entity) {
-        if (entity == player || entity == mc.getRenderViewEntity()) {
-            return false;
-        }
-        if (player.getDistanceSqToEntity(entity) > RANGE * RANGE) {
-            return false;
-        }
-        if (!entity.isEntityAlive()) {
-            return false;
-        }
-        if (entity instanceof EntityPlayer && ((EntityPlayer) entity).isSpectator()) {
-            return false;
-        }
-        // Friends are protected unconditionally there, not behind a setting.
-        if (entity instanceof EntityPlayer && TeamUtil.isFriend((EntityPlayer) entity)) {
-            return false;
-        }
-        if (entity.isInvisible() && !this.invisible.getValue()) {
-            return false;
-        }
-        if (entity instanceof EntityPlayer) {
-            if (!this.players.getValue()) {
-                return false;
-            }
-        } else if (!this.entities.getValue()) {
-            return false;
-        }
-        return player.canEntityBeSeen(entity);
-    }
-
-    /**
-     * Picks the target and the bone on it. The bone must sit inside the FOV cone; among the
-     * targets that qualify, the configured priority breaks the tie.
-     */
-    private void selectTarget() {
-        this.current = null;
-        this.currentBone = null;
-        EntityPlayerSP player = mc.thePlayer;
-        Vec3 eye = player.getPositionEyes(1.0F);
-        // From the real yaw, not getLook(): see Rotation.direction for why that one lags a tick.
-        Vec3 look = Rotation.of(player).direction();
-        double halfFov = this.fov.getValue() * 0.5;
-        double bestScore = Double.MAX_VALUE;
-
-        for (int i = 0; i < mc.theWorld.loadedEntityList.size(); i++) {
-            Entity entity = mc.theWorld.loadedEntityList.get(i);
-            if (!(entity instanceof EntityLivingBase)) {
-                continue;
-            }
-            EntityLivingBase living = (EntityLivingBase) entity;
-            if (!this.targeted(player, living)) {
-                continue;
-            }
-
-            Bone closest = null;
-            double closestAngle = halfFov;
-            for (int b = 0; b < Bone.ALL.length; b++) {
-                Bone bone = Bone.ALL[b];
-                if (!this.boneEnabled(bone)) {
-                    continue;
-                }
-                double angle = angleBetween(look, bone.point(player, living, 1.0F).subtract(eye));
-                if (angle >= closestAngle) {
-                    continue;
-                }
-                closest = bone;
-                closestAngle = angle;
-            }
-            if (closest == null) {
-                continue;
-            }
-
-            double score = this.priority.getValue() == PRIORITY_HEALTH ? living.getHealth() : closestAngle;
-            if (score >= bestScore) {
-                continue;
-            }
-            bestScore = score;
-            this.current = living;
-            this.currentBone = closest;
-        }
-    }
-
-    /** Where the view should be pointing right now, at the given partial tick. */
-    private Rotation aimAt(float partialTicks) {
-        return Rotation.toward(mc.thePlayer.getPositionEyes(partialTicks),
-                this.currentBone.point(mc.thePlayer, this.current, partialTicks));
-    }
-
-    /**
-     * Runs at the lowest event priority on purpose, so every module that steers the rotation has
-     * already had its say by the time this one looks. If the rotation is already claimed for the
-     * tick this module skips its own - the same outcome the original reaches by requesting at
-     * priority zero and letting its rotation manager pick the highest bidder.
-     * <p>
-     * Losing the tick is all that happens: the target, the running rotator and the silent
-     * rotation are all kept. The original loses the same arbitration without forgetting what it
-     * was doing, and throwing that state away makes every brush with another module restart the
-     * turn from scratch, which is far more disruptive than the conflict it was meant to avoid.
-     */
-    @EventTarget(Priority.LOWEST)
-    public void onUpdate(UpdateEvent event) {
-        if (event.getType() != EventType.PRE) {
-            return;
-        }
-        this.yielded = event.isRotated();
-        if (this.yielded) {
-            // Nothing of ours goes out this tick, and the pick stops following our rotation.
-            reported = null;
-        }
-        if (!this.canAim()) {
-            this.current = null;
-            this.currentBone = null;
-            this.decaySilent(event);
-            return;
-        }
-
-        this.selectTarget();
-        if (this.current == null || this.currentBone == null) {
-            this.decaySilent(event);
-            return;
-        }
-        if (this.yielded) {
-            return;
-        }
-
-        if (this.mode.getValue() != MODE_SILENT) {
-            // Regular mode turns the view itself, once per frame, in onRender3D.
-            this.silent = null;
-            reported = null;
-            return;
-        }
-
-        Rotation actual = Rotation.of(mc.thePlayer);
-        Rotation from = this.silent != null ? this.silent : actual;
-        Rotation stepped = this.rotator().step(from, this.aimAt(1.0F), this.config(), 1.0F);
-        this.silent = quantize(stepped, event.getYaw(), event.getPitch());
-        reported = this.silent;
-        event.setRotation(this.silent.yaw, this.silent.pitch, ROTATION_PRIORITY);
-        this.reportMovementYaw(event, this.silent.yaw);
-    }
-
-    /**
-     * Tells the client's MoveFix which yaw the server is going to simulate this tick, so it can
-     * rotate the movement input to match. Passing the real yaw instead is the same as asking for
-     * no correction, which is what the other modules here do when their move-fix is off.
-     */
-    private void reportMovementYaw(UpdateEvent event, float silentYaw) {
-        event.setPervRotation(this.moveFix.getValue() ? silentYaw : mc.thePlayer.rotationYaw,
-                ROTATION_PRIORITY);
-    }
-
-    /**
-     * Applies the strafe correction directly when the MoveFix module is not already doing it.
-     * <p>
-     * Silent mode is not safe to run uncorrected, and MoveFix is off by default, so leaving this
-     * to the user to discover means the first thing silent mode does is get them lagged back. The
-     * MoveFix module owns the correction whenever it is on - running both would rotate the input
-     * twice and send you somewhere neither rotation points.
-     */
-    @EventTarget
-    public void onMoveInput(MoveInputEvent event) {
-        if (this.yielded || this.mode.getValue() != MODE_SILENT || !this.moveFix.getValue()) {
-            return;
-        }
-        Rotation current = this.silent;
-        if (current == null || mc.thePlayer == null || moveFixModuleActive()) {
-            return;
-        }
-        if (MoveUtil.isForwardPressed()) {
-            MoveUtil.fixStrafe(current.yaw);
-        }
-    }
-
-    private static boolean moveFixModuleActive() {
-        if (Myau.moduleManager == null) {
-            return false;
-        }
-        Module module = Myau.moduleManager.modules.get(MoveFix.class);
-        return module != null && module.isEnabled();
-    }
-
-    /**
-     * With no target the reported rotation walks back to the real one instead of snapping to it,
-     * which would otherwise be a jump no mouse could produce.
-     */
-    private void decaySilent(UpdateEvent event) {
-        if (this.yielded) {
-            // Someone else owns the rotation; walking ours back would mean sending one.
-            return;
-        }
-        if (this.silent == null || mc.thePlayer == null) {
-            this.silent = null;
-            reported = null;
-            this.rotator = null;
-            return;
-        }
-        Rotation actual = Rotation.of(mc.thePlayer);
-        Rotation stepped = this.rotator().step(this.silent, actual, this.config(), 1.0F);
-        Rotation next = quantize(stepped, event.getYaw(), event.getPitch());
-        if (next.distanceTo(actual) < (float) RotationUtil.gcd()) {
-            this.silent = null;
-            reported = null;
-            this.rotator = null;
-            return;
-        }
-        this.silent = next;
-        reported = next;
-        event.setRotation(next.yaw, next.pitch, ROTATION_PRIORITY);
-        this.reportMovementYaw(event, next.yaw);
-    }
-
-    /**
-     * The visible turn, driven from the same point in the frame the original uses: immediately
-     * after the game has applied your own mouse movement, and before the camera for the frame is
-     * built.
-     * <p>
-     * This used to run during the world render instead, which is after the camera is already set
-     * up - so every correction only became visible on the following frame. At sixty frames a
-     * second that is sixteen milliseconds of latency on every nudge, and at thirty it is
-     * thirty-three; enough to feel like the assist is dragging behind the target rather than
-     * tracking it.
-     *
-     * @param partialTicks the frame's partial tick, for interpolating the aim point
-     */
-    public static void turn(float partialTicks) {
-        if (Myau.moduleManager == null) {
-            return;
-        }
-        Module module = Myau.moduleManager.modules.get(AimAssist.class);
-        if (module instanceof AimAssist && module.isEnabled()) {
-            ((AimAssist) module).applyTurn(partialTicks);
-        }
-    }
-
-    private void applyTurn(float partialTicks) {
-        long now = System.nanoTime();
-        float deltaTicks = this.lastFrameNanos == 0L ? 0.0F
-                : Math.min(4.0F, Math.max(0.0F, (now - this.lastFrameNanos) / 1.0e9F * 20.0F));
-        this.lastFrameNanos = now;
-
-        // The visible turn has to respect the stand-down too: it moves the view directly, outside
-        // the rotation arbitration, so it would otherwise fight whichever module took over.
-        if (this.yielded || this.mode.getValue() == MODE_SILENT
-                || this.current == null || this.currentBone == null) {
-            return;
-        }
-        if (deltaTicks <= 0.0F || mc.thePlayer == null || mc.theWorld == null || mc.currentScreen != null) {
-            return;
-        }
-        if (this.current.isDead || this.current.getHealth() <= 0.0F) {
-            return;
-        }
-
-        float clamped = Math.max(0.0F, Math.min(1.0F, partialTicks));
-        Rotation actual = Rotation.of(mc.thePlayer);
-        Rotation next = this.rotator().step(actual, this.aimAt(clamped), this.config(), deltaTicks);
-
-        float deltaYaw = actual.yawTo(next);
-        float deltaPitch = actual.pitchTo(next);
-        if (deltaYaw == 0.0F && deltaPitch == 0.0F) {
-            return;
-        }
-        // setAngles is the vanilla mouse path: yaw += x * 0.15, pitch -= y * 0.15, then clamped.
-        // It carries prevRotation along too, so the view does not smear across the frame.
-        mc.thePlayer.setAngles(deltaYaw / TURN_FACTOR, -deltaPitch / TURN_FACTOR);
-    }
-
-    /**
-     * Rounds onto the steps a real mouse produces at this sensitivity, measured from the last
-     * rotation the server was given.
-     */
-    private static Rotation quantize(Rotation rotation, float baseYaw, float basePitch) {
-        double step = RotationUtil.gcd();
-        if (step <= 0.0) {
-            return rotation;
-        }
-        float yaw = baseYaw + (float) (Math.round((rotation.yaw - baseYaw) / step) * step);
-        float pitch = basePitch + (float) (Math.round((rotation.pitch - basePitch) / step) * step);
-        return new Rotation(yaw, MathHelper.clamp_float(pitch, -90.0F, 90.0F));
-    }
-
-    /** Angle between two vectors, in degrees. */
-    private static double angleBetween(Vec3 first, Vec3 second) {
-        if (second.lengthVector() <= 1.0E-7) {
-            return 0.0;
-        }
-        double cosine = first.normalize().dotProduct(second.normalize());
-        return Math.toDegrees(Math.acos(Math.max(-1.0, Math.min(1.0, cosine))));
+        return this.target;
     }
 
     @Override
     public String[] getSuffix() {
-        return new String[]{this.mode.getModeString()};
+        return new String[]{String.valueOf(Math.round(this.horizontalSpeed.getValue()))};
+    }
+
+    /**
+     * The old module could aim silently; Vape's Simple mode always moves the real view, so there is
+     * never a separate look direction for the renderer to use.
+     */
+    public static Vec3 silentLook(Entity entity) {
+        return null;
+    }
+
+    // ------------------------------------------------------------------ worker
+
+    private static synchronized void startWorker() {
+        if (worker != null) {
+            return;
+        }
+        worker = new Thread(AimAssist::workerLoop, "Myau AimAssist");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    /** {@code AimAssistRotationWorkerThread}: runs the aim about once a millisecond while on. */
+    private static void workerLoop() {
+        while (true) {
+            try {
+                Thread.sleep(1L);
+                AimAssist module = instance();
+                if (module != null && module.isEnabled()) {
+                    module.tick();
+                }
+            } catch (InterruptedException interrupted) {
+                return;
+            } catch (Throwable ignored) {
+                // Entity lists change under the worker; a failed run is simply skipped, as in Vape.
+            }
+        }
+    }
+
+    private static AimAssist instance() {
+        if (Myau.moduleManager == null) {
+            return null;
+        }
+        Module module = Myau.moduleManager.modules.get(AimAssist.class);
+        return module instanceof AimAssist ? (AimAssist) module : null;
+    }
+
+    private static boolean attackDown() {
+        return mc.gameSettings.keyBindAttack.isKeyDown();
+    }
+
+    private void tick() {
+        EntityPlayerSP player = mc.thePlayer;
+        if (mc.theWorld == null || player == null) {
+            return;
+        }
+        if (!this.canAim()) {
+            this.resetRotationState();
+            return;
+        }
+        boolean requireMouseDown = this.requireMouseDown.getValue();
+        if (requireMouseDown && !attackDown()) {
+            this.target = null;
+            this.resetRotationState();
+            return;
+        }
+        EntityLivingBase current = this.target;
+        if (current != null && (deadOrDying(current) || player.getDistanceToEntity(current) > this.distance.getValue())) {
+            this.resetRotationState();
+            this.target = null;
+            current = null;
+        }
+        if (requireMouseDown && attackDown() && current == null || !requireMouseDown) {
+            EntityLivingBase candidate = this.findBestTarget();
+            if (!requireMouseDown) {
+                ++this.retargetCounter;
+                if (this.retargetCounter > 700 || current == null || !this.isValidTarget(current)) {
+                    this.target = candidate;
+                    this.retargetCounter = 0;
+                }
+            } else {
+                this.target = candidate;
+            }
+        }
+        if (mc.theWorld == null) {
+            return;
+        }
+        if (this.target != null && mc.currentScreen == null) {
+            this.updateVelocityBuffers();
+            this.applyRotation();
+        } else {
+            this.resetRotationState();
+        }
+    }
+
+    /**
+     * Vape's {@code canAim}, plus Myau+'s stand-down: KillAura wins while it holds a target, and
+     * BlockIn and Clutch while they aim - their placements are validated against the rotation.
+     */
+    private boolean canAim() {
+        EntityPlayerSP player = mc.thePlayer;
+        if (player == null || mc.playerController == null) {
+            return false;
+        }
+        if (killAuraBusy() || BlockIn.isActive() || Clutch.isAiming()) {
+            return false;
+        }
+        boolean checkCurrentBlock = this.checkBlockBreak.getValue();
+        if (checkCurrentBlock && this.breakBlocksWhitelist.getValue()) {
+            checkCurrentBlock = this.blockBreakItems.matches(player.getHeldItem());
+        }
+        if (checkCurrentBlock) {
+            MovingObjectPosition mouseOver = mc.objectMouseOver;
+            boolean aimingAtBlock = mouseOver != null
+                    && mouseOver.typeOfHit == MovingObjectPosition.MovingObjectType.BLOCK;
+            if (aimingAtBlock) {
+                this.blockBreakCooldown = 250;
+                return false;
+            }
+            if (this.blockBreakCooldown > 0) {
+                --this.blockBreakCooldown;
+            }
+            if (this.blockBreakCooldown > 0) {
+                return false;
+            }
+        }
+        return this.hasRequiredItem();
+    }
+
+    private static boolean killAuraBusy() {
+        if (Myau.moduleManager == null) {
+            return false;
+        }
+        Module module = Myau.moduleManager.modules.get(KillAura.class);
+        return module instanceof KillAura && module.isEnabled() && ((KillAura) module).getTarget() != null;
+    }
+
+    private boolean hasRequiredItem() {
+        if (!this.limitToItems.getValue()) {
+            return true;
+        }
+        return this.allowedItems.matches(mc.thePlayer.getHeldItem());
+    }
+
+    // ------------------------------------------------------------------ targeting
+
+    private EntityLivingBase findBestTarget() {
+        if (mc.theWorld == null) {
+            return null;
+        }
+        List<EntityLivingBase> targets = new ArrayList<EntityLivingBase>();
+        for (Object object : new ArrayList<Object>(mc.theWorld.loadedEntityList)) {
+            if (object instanceof EntityLivingBase && this.isValidTarget((EntityLivingBase) object)) {
+                targets.add((EntityLivingBase) object);
+            }
+        }
+        final EntityPlayerSP player = mc.thePlayer;
+        switch (this.targetMode.getValue()) {
+            case TARGET_YAW:
+                targets.sort(Comparator.comparingInt(entity -> angleToEntity(player, entity)));
+                break;
+            case TARGET_DISTANCE:
+                targets.sort(distanceOrder(player));
+                break;
+            case TARGET_THREAT:
+                targets.sort(playersBy(player, AimAssist::weaponThreat));
+                break;
+            case TARGET_ARMOR:
+                targets.sort(playersBy(player, AimAssist::equipmentValue));
+                break;
+            case TARGET_HEALTH:
+                targets.sort((first, second) -> Float.compare(first.getHealth(), second.getHealth()));
+                break;
+            default:
+                break;
+        }
+        return targets.isEmpty() ? null : targets.get(0);
+    }
+
+    private static Comparator<EntityLivingBase> distanceOrder(EntityPlayerSP player) {
+        return (first, second) -> Float.compare(player.getDistanceToEntity(first), player.getDistanceToEntity(second));
+    }
+
+    /** Armor and Threat compare players by score and anything else by distance, as Vape's comparators do. */
+    private static Comparator<EntityLivingBase> playersBy(EntityPlayerSP player, java.util.function.ToDoubleFunction<EntityPlayer> score) {
+        return (first, second) -> {
+            if (first instanceof EntityPlayer && second instanceof EntityPlayer) {
+                return Double.compare(score.applyAsDouble((EntityPlayer) first), score.applyAsDouble((EntityPlayer) second));
+            }
+            return Float.compare(player.getDistanceToEntity(first), player.getDistanceToEntity(second));
+        };
+    }
+
+    private boolean isValidTarget(EntityLivingBase target) {
+        EntityPlayerSP player = mc.thePlayer;
+        if (target == null || player == null || target == player) {
+            return false;
+        }
+        if (target.getHealth() <= 0.0F || target.isDead) {
+            return false;
+        }
+        // Vape compares against the whole-number part of the distance setting here.
+        if (player.getDistanceToEntity(target) >= (float) (int) this.distance.getValue().floatValue()) {
+            return false;
+        }
+        if (angleToEntity(player, target) > this.maxAngle.getValue() / 2) {
+            return false;
+        }
+        if (target instanceof EntityPlayer && TeamUtil.isFriend((EntityPlayer) target)) {
+            return false;
+        }
+        if (target == player.ridingEntity) {
+            return false;
+        }
+        return this.passesItemFilter(target);
+    }
+
+    private boolean passesItemFilter(EntityLivingBase target) {
+        if (this.limitToItems.getValue() && !this.allowedItems.matches(mc.thePlayer.getHeldItem())) {
+            return false;
+        }
+        return this.passesTargetFilter(target);
+    }
+
+    /** Vape's {@code EntityTargetFilterValue.isValidTarget}. */
+    private boolean passesTargetFilter(EntityLivingBase entity) {
+        EntityPlayerSP player = mc.thePlayer;
+        if (entity == player || entity.getHealth() <= 0.0F) {
+            return false;
+        }
+        if (this.ignoreInvisible.getValue() && fullyInvisible(entity)) {
+            return false;
+        }
+        if (this.ignoreBehindWalls.getValue() && !player.canEntityBeSeen(entity)) {
+            return false;
+        }
+        boolean isPlayer = entity instanceof EntityPlayer;
+        if (isPlayer && TeamUtil.isFriend((EntityPlayer) entity)) {
+            return false;
+        }
+        boolean isMob = entity instanceof IMob;
+        boolean isPeaceful = entity instanceof EntityAnimal || entity instanceof EntityWaterMob
+                || entity instanceof EntityVillager;
+        if (isPlayer) {
+            EntityPlayer target = (EntityPlayer) entity;
+            if (!this.players.getValue()) {
+                return false;
+            }
+            if (TeamUtil.isTarget(target)) {
+                return true;
+            }
+            if (this.ignoreNaked.getValue() && naked(target)) {
+                return false;
+            }
+            if (teammate(target)) {
+                return false;
+            }
+            return !AntiBot.isBot(target);
+        }
+        if (isMob && !this.mobs.getValue()) {
+            return false;
+        }
+        if (isPeaceful && !this.peaceful.getValue()) {
+            return false;
+        }
+        return isMob || isPeaceful || this.peaceful.getValue();
+    }
+
+    /** Vape's teammate check only applies while AntiBot is on. */
+    private static boolean teammate(EntityPlayer target) {
+        if (Myau.moduleManager == null) {
+            return false;
+        }
+        Module module = Myau.moduleManager.modules.get(AntiBot.class);
+        return module != null && module.isEnabled() && TeamUtil.isSameTeam(target);
+    }
+
+    /** Invisible and nothing held or worn that would give them away. */
+    private static boolean fullyInvisible(EntityLivingBase entity) {
+        if (!entity.isInvisible() || entity.getHeldItem() != null) {
+            return false;
+        }
+        if (entity instanceof EntityPlayer) {
+            for (ItemStack armor : ((EntityPlayer) entity).inventory.armorInventory) {
+                if (armor != null) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Nothing in hand and no armor on. */
+    private static boolean naked(EntityPlayer player) {
+        if (player.getHeldItem() != null) {
+            return false;
+        }
+        for (ItemStack armor : player.inventory.armorInventory) {
+            if (armor != null) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean deadOrDying(EntityLivingBase entity) {
+        return entity.isDead || entity.getHealth() <= 0.0F;
+    }
+
+    // ------------------------------------------------------------------ item scores (Threat / Armor)
+
+    /** {@code EntityArmorValueComparator}: the held weapon, boosted under Strength. */
+    private static double weaponThreat(EntityPlayer player) {
+        ItemStack held = player.getHeldItem();
+        if (held == null) {
+            return 0.0;
+        }
+        float score = weaponScore(held);
+        PotionEffect strength = player.getActivePotionEffect(Potion.damageBoost);
+        if (strength != null && strength.getDuration() > 0) {
+            score = (float) (score * (1.375 * (strength.getAmplifier() + 1)));
+        }
+        return score;
+    }
+
+    /** {@code ItemStackScoreUtil}'s weapon score: sharpness, base damage and fire aspect. */
+    private static float weaponScore(ItemStack stack) {
+        if (!(stack.getItem() instanceof ItemSword) && !(stack.getItem() instanceof ItemTool)) {
+            return 0.0F;
+        }
+        return EnchantmentHelper.getEnchantmentLevel(Enchantment.sharpness.effectId, stack) * 1.25F
+                + attackDamage(stack)
+                + EnchantmentHelper.getEnchantmentLevel(Enchantment.fireAspect.effectId, stack) * 0.01F;
+    }
+
+    private static float attackDamage(ItemStack stack) {
+        float damage = 0.0F;
+        Collection<AttributeModifier> modifiers = stack.getAttributeModifiers()
+                .get(SharedMonsterAttributes.attackDamage.getAttributeUnlocalizedName());
+        for (AttributeModifier modifier : modifiers) {
+            damage += (float) modifier.getAmount();
+        }
+        return damage;
+    }
+
+    /** {@code EntityEquipmentValueComparator}: every worn armor piece's protection score. */
+    private static double equipmentValue(EntityPlayer player) {
+        double value = 0.0;
+        for (ItemStack armor : player.inventory.armorInventory) {
+            if (armor == null || !(armor.getItem() instanceof ItemArmor)) {
+                continue;
+            }
+            value += ((ItemArmor) armor.getItem()).damageReduceAmount
+                    + EnchantmentHelper.getEnchantmentLevel(Enchantment.protection.effectId, armor)
+                    + EnchantmentHelper.getEnchantmentLevel(Enchantment.featherFalling.effectId, armor) * 0.1
+                    + EnchantmentHelper.getEnchantmentLevel(Enchantment.fireProtection.effectId, armor) * 0.1
+                    + EnchantmentHelper.getEnchantmentLevel(Enchantment.blastProtection.effectId, armor) * 0.1;
+        }
+        return value;
+    }
+
+    // ------------------------------------------------------------------ Vape's rotation math
+
+    private static float partialTicks() {
+        return ((IAccessorMinecraft) mc).getTimer().renderPartialTicks;
+    }
+
+    private static double lerp(double previous, double current, float partialTicks) {
+        return previous + (current - previous) * partialTicks;
+    }
+
+    private static double wrapTo180(double angle) {
+        angle %= 360.0;
+        if (angle >= 180.0) {
+            angle -= 360.0;
+        }
+        if (angle < -180.0) {
+            angle += 360.0;
+        }
+        return angle;
+    }
+
+    /** The yaw, in degrees, that faces from (x, z) toward (toX, toZ); Vape's quadrant form. */
+    private static double yawToward(double x, double z, double toX, double toZ) {
+        double yaw = 0.0;
+        double dx = toX - x;
+        double dz = toZ - z;
+        if (dz > 0.0 && dx > 0.0) {
+            yaw = Math.toDegrees(-Math.atan(dx / dz));
+        } else if (dz > 0.0 && dx < 0.0) {
+            yaw = Math.toDegrees(-Math.atan(dx / dz));
+        } else if (dz < 0.0 && dx > 0.0) {
+            yaw = -90.0 + Math.toDegrees(Math.atan(dz / dx));
+        } else if (dz < 0.0 && dx < 0.0) {
+            yaw = 90.0 + Math.toDegrees(Math.atan(dz / dx));
+        }
+        return yaw;
+    }
+
+    /** {@code RotationUtil.a(Entity, Entity)}: whole-degree yaw offset to an entity, 0..180. */
+    private static int angleToEntity(Entity from, Entity to) {
+        double yaw = yawToward(from.posX, from.posZ, to.posX, to.posZ);
+        int angle = (int) (Math.abs(yaw - from.rotationYaw) % 360.0);
+        return angle > 180 ? 360 - angle : angle;
+    }
+
+    /** {@code RotationUtil.C(x, z, yaw, toX, toZ)}: yaw offset to a point, 0..180. */
+    private static double horizontalAngle(double x, double z, float yaw, double toX, double toZ) {
+        double offset = Math.abs(yawToward(x, z, toX, toZ) - yaw) % 360.0;
+        return offset > 180.0 ? 360.0 - offset : offset;
+    }
+
+    /** {@code RotationUtil.p}: whether the point is to the left of the view. */
+    private static boolean onLeft(double x, double z, float yaw, double toX, double toZ) {
+        int offset = (int) wrapTo180((yawToward(x, z, toX, toZ) - yaw) % 360.0);
+        return offset < 0;
+    }
+
+    /**
+     * {@code RotationUtil.H}: whole-degree pitch offset to a point, measured - as in Vape - from
+     * the player's feet rather than the eyes.
+     */
+    private static int verticalAngle(Entity from, double x, double y, double z) {
+        double dx = x - from.posX;
+        double dy = y - from.posY;
+        double dz = z - from.posZ;
+        double flat = Math.sqrt(dx * dx + dz * dz);
+        float pitch = (float) (-(Math.atan2(dy, flat) * 180.0 / Math.PI));
+        return (int) (float) wrapTo180(from.rotationPitch - pitch);
+    }
+
+    private static double clamp(double value, double min, double max) {
+        if (value < max && value > min) {
+            return value;
+        }
+        if (value > max) {
+            return max;
+        }
+        if (value < min) {
+            return min;
+        }
+        return value;
+    }
+
+    /** {@code AimAssistRotationSubModule.computeTargetOffset}: the hitbox point nearest you. */
+    private void computeTargetOffset(EntityPlayerSP player, EntityLivingBase target, float partialTicks) {
+        AxisAlignedBB box = target.getEntityBoundingBox();
+        // Vape also clamps the eye height into the box here, but only uses X and Z.
+        double closestX = clamp(player.posX, box.minX, box.maxX);
+        double closestZ = clamp(player.posZ, box.minZ, box.maxZ);
+        if (closestX == player.posX) {
+            closestX = player.posX + 0.01;
+        }
+        if (closestZ == player.posZ) {
+            closestZ = player.posZ + 0.01;
+        }
+        double motionX = target.posX - target.prevPosX;
+        double motionZ = target.posZ - target.prevPosZ;
+        double previousX = closestX - motionX;
+        double previousZ = closestZ - motionZ;
+        this.targetX = previousX + (closestX - previousX) * partialTicks;
+        this.targetZ = previousZ + (closestZ - previousZ) * partialTicks;
+    }
+
+    private void updateDrift() {
+        this.driftTimer += 1.0;
+        if (this.driftTimer >= (double) (250 + this.random.nextInt(50))) {
+            this.driftTimer = this.random.nextInt(-50 - -100) + -100;
+            this.randomOffsetX = this.random.nextInt(2 - -1) + -1;
+            this.randomOffsetY = this.random.nextInt(2 - -1) + -1;
+        }
+        int horizontalStep = this.randomOffsetX;
+        int verticalStep = this.randomOffsetY;
+        // Vape draws these two and discards them; kept so the random sequence is the same.
+        this.random.nextInt(10);
+        this.random.nextInt(10);
+        if (this.random.nextInt(10) < 2) {
+            horizontalStep = 0;
+        }
+        if (this.random.nextInt(10) < 2) {
+            verticalStep = 0;
+        }
+        if (this.driftTimer < 0.0) {
+            horizontalStep = 0;
+            verticalStep = 0;
+        }
+        synchronized (this.countsLock) {
+            if (this.random.nextInt(20) == 1) {
+                this.driftX += horizontalStep;
+                this.driftY += verticalStep;
+            }
+            if (this.horizontalMouseAccumulator > 0.0F && this.driftX < 0
+                    || this.horizontalMouseAccumulator < 0.0F && this.driftX > 0) {
+                this.driftX = 0;
+            }
+        }
+    }
+
+    private void queueVerticalAdjustment(float adjustment, float angleDifference) {
+        synchronized (this.countsLock) {
+            if (adjustment != 0.0F) {
+                adjustment *= 5.0F;
+                float speed = this.verticalSpeed.getValue();
+                float absoluteAngleDifference = Math.abs(angleDifference);
+                if (absoluteAngleDifference <= 10.0F) {
+                    this.yawBoost = speed;
+                }
+                if (this.yawBoost > 0.0F) {
+                    speed -= this.yawBoost / 3.0F;
+                    this.yawBoost -= absoluteAngleDifference / 200.0F;
+                }
+                this.verticalMouseAccumulator += speed * adjustment;
+            } else {
+                this.verticalMouseAccumulator = 0.0F;
+            }
+        }
+    }
+
+    private void queueHorizontalAdjustment(float adjustment, EntityPlayerSP player, EntityLivingBase target) {
+        synchronized (this.countsLock) {
+            if (adjustment != 0.0F) {
+                adjustment *= 5.0F;
+                float speed = this.horizontalSpeed.getValue();
+                float angleDifference = angleToEntity(player, target);
+                if (angleDifference <= 10.0F) {
+                    this.pitchBoost = speed;
+                }
+                if (this.pitchBoost > 0.0F) {
+                    speed -= this.pitchBoost / 3.0F;
+                    this.pitchBoost -= angleDifference / 200.0F;
+                }
+                this.horizontalMouseAccumulator += speed * adjustment;
+            } else {
+                this.horizontalMouseAccumulator = 0.0F;
+            }
+        }
+    }
+
+    private void resetRotationState() {
+        synchronized (this.countsLock) {
+            this.horizontalMouseAccumulator = 0.0F;
+            this.verticalMouseAccumulator = 0.0F;
+            this.driftX = 0;
+            this.driftY = 0;
+        }
+        this.randomOffsetX = 0;
+        this.randomOffsetY = 0;
+    }
+
+    private void updateVelocityBuffers() {
+        ++this.swapTickCounter;
+        if (this.swapTickCounter > 10) {
+            this.verticalVelocityBuffer = this.verticalVelocity;
+            this.horizontalVelocity = this.horizontalVelocityBuffer;
+            this.horizontalVelocityBuffer = 0.0F;
+            this.verticalVelocity = 0.0F;
+            this.swapTickCounter = 0;
+        }
+    }
+
+    /** {@code AimAssistRotationSubModule.applyRotation}. */
+    private void applyRotation() {
+        EntityPlayerSP player = mc.thePlayer;
+        EntityLivingBase target = this.target;
+        if (player == null || target == null) {
+            return;
+        }
+        this.updateDrift();
+        float partialTicks = partialTicks();
+        this.targetX = lerp(target.lastTickPosX, target.posX, partialTicks);
+        this.targetY = lerp(target.lastTickPosY, target.posY, partialTicks);
+        this.targetZ = lerp(target.lastTickPosZ, target.posZ, partialTicks);
+        if (this.targetArea.getValue() == AREA_CLOSEST) {
+            this.computeTargetOffset(player, target, partialTicks);
+        }
+        double targetMotionX = this.targetX - this.prevTargetX;
+        double targetMotionZ = this.targetZ - this.prevTargetZ;
+        this.prevTargetX = this.targetX;
+        this.prevTargetZ = this.targetZ;
+        float viewYaw = player.rotationYaw;
+        double predictionFactor = 1.7;
+        double predictedTargetX = this.targetX + targetMotionX * predictionFactor;
+        double predictedTargetZ = this.targetZ + targetMotionZ * predictionFactor;
+        double playerX = lerp(player.lastTickPosX, player.posX, partialTicks);
+        double playerZ = lerp(player.lastTickPosZ, player.posZ, partialTicks);
+        double horizontalAngleDifference = horizontalAngle(playerX, playerZ, viewYaw, predictedTargetX, predictedTargetZ);
+        boolean targetOnLeft = onLeft(playerX, playerZ, viewYaw, predictedTargetX, predictedTargetZ);
+        int verticalAngleDifference = verticalAngle(player, this.targetX, this.targetY, this.targetZ);
+        boolean targetAbove = verticalAngleDifference < 0;
+        int verticalDeadZoneDistance = Math.abs(verticalAngleDifference) - 10;
+
+        float horizontalForce = 1.0F;
+        float verticalForce = 1.0F;
+        horizontalForce = (float) ((double) horizontalForce + (0.0 + 2.0 * this.sharedRandom.nextDouble()));
+        horizontalForce = (float) ((double) horizontalForce + horizontalAngleDifference / 50.0);
+        verticalForce = (float) ((double) verticalForce + (0.0 + 2.0 * this.sharedRandom.nextDouble()));
+        verticalForce += (float) Math.abs(verticalDeadZoneDistance) / 50.0F;
+        if (Math.abs(horizontalAngleDifference - this.lastAngleDiff) > 6.0) {
+            horizontalForce = (float) ((double) horizontalForce + horizontalAngleDifference / 35.0);
+        }
+        float distanceToTarget = player.getDistanceToEntity(target);
+        double proximityBoost = Math.max(0.0, (9.0F - distanceToTarget) / 2.5F - 2.0F);
+        horizontalForce = (float) ((double) horizontalForce + proximityBoost);
+        float strafeInput = player.movementInput.moveStrafe;
+        boolean strafingAway = targetOnLeft ? strafeInput < 0.0F : strafeInput > 0.0F;
+        if (this.strafeIncrease.getValue() && strafingAway) {
+            horizontalForce = (float) ((double) horizontalForce * 1.6);
+        }
+        if (distanceToTarget < 0.5F) {
+            horizontalForce /= 5.0F;
+        }
+        float horizontalAcceleration = horizontalForce / 90.0F * (targetOnLeft ? -1.0F : 1.0F);
+        float verticalAcceleration = verticalForce / 90.0F * (targetAbove ? 1.0F : -1.0F);
+        if (horizontalAngleDifference < 5.0) {
+            horizontalAcceleration = 0.0F;
+            this.horizontalVelocity *= 0.7F;
+            boolean strafingToward = targetOnLeft ? strafeInput > 0.0F : strafeInput < 0.0F;
+            if (strafingToward) {
+                this.horizontalVelocity *= 0.5F;
+            }
+        }
+        if (targetOnLeft != this.prevOnLeft) {
+            this.horizontalVelocity = -this.horizontalVelocity;
+            this.horizontalVelocityBuffer = -this.horizontalVelocityBuffer;
+            synchronized (this.countsLock) {
+                this.horizontalMouseAccumulator = 0.0F;
+            }
+        }
+        if (targetAbove != this.prevAbove) {
+            this.verticalVelocityBuffer = -this.verticalVelocityBuffer;
+            this.verticalVelocity = -this.verticalVelocity;
+            synchronized (this.countsLock) {
+                this.verticalMouseAccumulator = 0.0F;
+            }
+        }
+        if (verticalDeadZoneDistance < 5) {
+            verticalAcceleration = 0.0F;
+            this.verticalVelocityBuffer *= 0.7F;
+        }
+        this.horizontalVelocityBuffer += horizontalAcceleration;
+        this.verticalVelocity += verticalAcceleration;
+        float smoothedHorizontalVelocity = this.horizontalVelocity;
+        float smoothedVerticalVelocity = this.verticalVelocityBuffer;
+        if (Math.abs(smoothedHorizontalVelocity) > 10.0F) {
+            this.horizontalVelocityBuffer = 0.0F;
+            this.horizontalVelocity = 0.0F;
+            return;
+        }
+        float horizontalAdjustment = smoothedHorizontalVelocity * 0.15F;
+        if (horizontalAngleDifference <= 9.0) {
+            horizontalAdjustment = (float) ((double) horizontalAdjustment / (10.0 - horizontalAngleDifference));
+        }
+        if (Float.isNaN(horizontalAdjustment)) {
+            this.horizontalVelocityBuffer = 0.0F;
+            this.horizontalVelocity = 0.0F;
+            return;
+        }
+        this.queueHorizontalAdjustment(horizontalAdjustment, player, target);
+        if (this.aimVertically.getValue()) {
+            float verticalAdjustment = (float) ((double) smoothedVerticalVelocity * 0.15);
+            if (Float.isNaN(verticalAdjustment)) {
+                this.verticalVelocity = 0.0F;
+                this.verticalVelocityBuffer = 0.0F;
+                return;
+            }
+            this.queueVerticalAdjustment(verticalAdjustment, verticalAngleDifference);
+        }
+        this.prevAbove = targetAbove;
+        this.prevOnLeft = targetOnLeft;
+        ++this.sampleCounter;
+        if (this.sampleCounter > 10) {
+            this.lastAngleDiff = horizontalAngleDifference;
+            this.sampleCounter = 0;
+        }
+    }
+
+    // ------------------------------------------------------------------ per frame
+
+    /** Called once a frame after the mouse is read (MixinEntityRenderer). */
+    public static void turn(float partialTicks) {
+        AimAssist module = instance();
+        if (module != null && module.isEnabled()) {
+            module.moveMouse();
+        }
+    }
+
+    /**
+     * {@code onPreRenderTick}: takes the whole mouse counts out of the totals and moves the view
+     * by them through the vanilla mouse path, scaled by sensitivity as the game scales a mouse.
+     */
+    private void moveMouse() {
+        EntityPlayerSP player = mc.thePlayer;
+        if (mc.theWorld == null || player == null || this.target == null) {
+            return;
+        }
+        float horizontalDelta;
+        float verticalDelta;
+        synchronized (this.countsLock) {
+            this.horizontalMouseAccumulator += (float) this.driftX;
+            this.verticalMouseAccumulator += (float) this.driftY;
+            int horizontalMouseSteps = (int) this.horizontalMouseAccumulator;
+            int verticalMouseSteps = (int) this.verticalMouseAccumulator;
+            float remainingHorizontal = this.horizontalMouseAccumulator - (float) horizontalMouseSteps;
+            float remainingVertical = this.verticalMouseAccumulator - (float) verticalMouseSteps;
+            float sensitivity = mc.gameSettings.mouseSensitivity;
+            float sensitivityBase = sensitivity * 0.6F + 0.2F;
+            float sensitivityScale = sensitivityBase * sensitivityBase * sensitivityBase * 8.0F;
+            horizontalDelta = (float) horizontalMouseSteps * sensitivityScale;
+            verticalDelta = (float) verticalMouseSteps * sensitivityScale;
+            this.horizontalMouseAccumulator = remainingHorizontal;
+            this.verticalMouseAccumulator = remainingVertical;
+            this.driftX = 0;
+            this.driftY = 0;
+        }
+        if (horizontalDelta != 0.0F || verticalDelta != 0.0F) {
+            // setAngles is Vape's applyTrackedMouseDelta: yaw += x * 0.15, pitch -= y * 0.15, clamped.
+            player.setAngles(horizontalDelta, -verticalDelta);
+        }
     }
 }
