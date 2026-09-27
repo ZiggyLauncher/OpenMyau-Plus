@@ -70,6 +70,10 @@ val shadowImpl: Configuration by configurations.creating {
     configurations.implementation.get().extendsFrom(this)
 }
 dependencies {
+    // The version-independent half of the client. Shadowed in so the mod jar stays a single file.
+    shadowImpl(project(":platform-api"))
+    shadowImpl(project(":core"))
+
     minecraft("com.mojang:minecraft:1.8.9")
     mappings("de.oceanlabs.mcp:mcp_stable:22-1.8.9")
     forge("net.minecraftforge:forge:1.8.9-11.15.1.2318-1.8.9")

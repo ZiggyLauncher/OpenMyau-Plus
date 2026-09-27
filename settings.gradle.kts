@@ -21,3 +21,8 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version("0.6.0")
 }
 rootProject.name = "myau"
+
+// The version-independent half of the client. `platform-api` is the seam it talks to the game
+// through; neither is compiled against Minecraft.
+include("platform-api")
+include("core")

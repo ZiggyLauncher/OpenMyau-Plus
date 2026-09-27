@@ -1,8 +1,6 @@
 package myau.module;
 
-import myau.Myau;
-import myau.module.modules.HUD;
-import myau.util.KeyBindUtil;
+import myau.platform.Platforms;
 
 public abstract class Module {
     protected final String name;
@@ -41,7 +39,7 @@ public abstract class Module {
     public String formatModule() {
         return String.format(
                 "%s%s &r(%s&r)",
-                this.key == 0 ? "" : String.format("&l[%s] &r", KeyBindUtil.getKeyName(this.key)),
+                this.key == 0 ? "" : String.format("&l[%s] &r", Platforms.get().keyName(this.key)),
                 this.name,
                 this.enabled ? "&a&lON" : "&c&lOFF"
         );
@@ -70,21 +68,9 @@ public abstract class Module {
         boolean enabled = !this.enabled;
         this.setEnabled(enabled);
         if (this.enabled == enabled) {
-            if (((HUD) Myau.moduleManager.modules.get(HUD.class)).toggleSound.getValue()) {
-                Myau.moduleManager.playSound();
-            }
-
-            // Add a transient in-game notification for toggles
-            try {
-                if (Myau.notificationManager != null) {
-                    String action = this.enabled ? "was toggled successfully" : "was untoggled successfully";
-                    // green for enabled, red for disabled
-                    int color = this.enabled ? 0x00FF00 : 0xFF0000;
-                    Myau.notificationManager.add(this.getName() + " " + action, color);
-                }
-            } catch (Exception ignored) {
-            }
-
+            // The toggle sound and the on-screen notification are client features, not module
+            // behaviour, so they live behind the platform rather than in here.
+            Platforms.get().onModuleToggled(this.getName(), this.enabled);
             return true;
         } else {
             return false;

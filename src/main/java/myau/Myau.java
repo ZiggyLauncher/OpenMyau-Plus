@@ -51,6 +51,8 @@ public class Myau {
     }
 
     public void init() {
+        // Tell the shared code which Minecraft it is running on, before anything uses it.
+        myau.platform.Platforms.set(new myau.platform.impl.Platform189());
         rotationManager = new RotationManager();
         floatManager = new FloatManager();
         blinkManager = new BlinkManager();
